@@ -11,6 +11,8 @@ export interface Film {
   blurbLong?: string;
   tags: string[];
   adult?: boolean;
+  /** Grid-only: all episodes of the same series collapsed into this card (ascending). */
+  stackedEpisodes?: Film[];
 }
 
 export interface KVTubeStreamInfo {

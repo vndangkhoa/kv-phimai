@@ -1,7 +1,15 @@
 import React, { memo, useState, useEffect } from 'react';
-import { IoBookmark, IoBookmarkOutline, IoCheckmarkCircle } from 'react-icons/io5';
+import { IoBookmark, IoBookmarkOutline, IoCheckmarkCircle, IoLayersOutline } from 'react-icons/io5';
 import type { Film } from '../types/phimai';
-import { getThumbUrl, formatViewsVN, CAT_LABEL } from '../utils/phimaiUtils';
+import {
+  getThumbUrl,
+  formatViewsVN,
+  CAT_LABEL,
+  getEpisodeInfo,
+  getEpisodeNumber,
+} from '../utils/phimaiUtils';
+
+const MAX_EP_CHIPS = 4;
 
 interface VideoCardProps {
   film: Film;
@@ -45,8 +53,29 @@ export const VideoCard = memo(function VideoCard({
   const thumbUrl = imgErr ? DEFAULT_THUMB : getThumbUrl(film.id);
   const firstTool = (film.tool || 'AI').split('•')[0].trim();
 
+  // Stacked series card: all episodes of one movie collapsed into this card.
+  const episodes = film.stackedEpisodes && film.stackedEpisodes.length > 1 ? film.stackedEpisodes : null;
+  const seriesTitle = episodes ? getEpisodeInfo(film.title, film.channel).baseTitle : '';
+  const displayTitle = seriesTitle || film.title;
+  const epLabel = (ep: Film, idx: number) => `Tập ${getEpisodeNumber(ep) ?? idx + 1}`;
+  const firstEp = episodes ? getEpisodeNumber(episodes[0]) : null;
+  const lastEp = episodes ? getEpisodeNumber(episodes[episodes.length - 1]) : null;
+
+  const openEpisode = (e: React.MouseEvent, ep: Film) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onOpenFilm(ep);
+  };
+
   return (
     <div className="yt-video-card-container">
+      <div className={`yt-card-stack${episodes ? ' is-stacked' : ''}`}>
+        {episodes && (
+          <>
+            <div className="yt-card-stack-layer yt-card-stack-layer-2" aria-hidden="true" />
+            <div className="yt-card-stack-layer yt-card-stack-layer-1" aria-hidden="true" />
+          </>
+        )}
       <div className="yt-card-thumb-wrapper">
         <a
           href={`/watch?v=${encodeURIComponent(film.id)}`}
@@ -127,6 +156,14 @@ export const VideoCard = memo(function VideoCard({
           {/* Duration Badge */}
           {film.dur && <div className="yt-card-duration-badge">{film.dur}</div>}
 
+          {/* Stacked series episode count */}
+          {episodes && (
+            <div className="yt-card-stack-badge" data-testid="stack-badge">
+              <IoLayersOutline size={14} />
+              <span>{episodes.length} tập</span>
+            </div>
+          )}
+
           {/* Watch Progress Bar */}
           {progressPct > 0 && (
             <div className="yt-card-progress-bar-bg">
@@ -134,6 +171,7 @@ export const VideoCard = memo(function VideoCard({
             </div>
           )}
         </a>
+      </div>
       </div>
 
       {/* Metadata Row */}
@@ -157,7 +195,7 @@ export const VideoCard = memo(function VideoCard({
             className="yt-card-title-link"
           >
             <h3 className="yt-card-title" title={film.title}>
-              {film.title}
+              {displayTitle}
             </h3>
           </a>
 
@@ -175,7 +213,15 @@ export const VideoCard = memo(function VideoCard({
             <div className="yt-card-meta-line">
               <span>{formatViewsVN(film.views)}</span>
               <span className="yt-card-meta-dot">•</span>
-              <span>{CAT_LABEL[film.cat] || film.cat}</span>
+              {episodes ? (
+                <span>
+                  {firstEp !== null && lastEp !== null && lastEp !== firstEp
+                    ? `Tập ${firstEp}–${lastEp}`
+                    : `${episodes.length} tập`}
+                </span>
+              ) : (
+                <span>{CAT_LABEL[film.cat] || film.cat}</span>
+              )}
               {film.rank ? (
                 <>
                   <span className="yt-card-meta-dot">•</span>
@@ -183,6 +229,32 @@ export const VideoCard = memo(function VideoCard({
                 </>
               ) : null}
             </div>
+
+            {episodes && (
+              <div className="yt-card-ep-chips">
+                {episodes.slice(0, MAX_EP_CHIPS).map((ep, idx) => (
+                  <a
+                    key={ep.id}
+                    href={`/watch?v=${encodeURIComponent(ep.id)}`}
+                    onClick={(e) => openEpisode(e, ep)}
+                    className="yt-card-ep-chip"
+                    title={ep.title}
+                  >
+                    {epLabel(ep, idx)}
+                  </a>
+                ))}
+                {episodes.length > MAX_EP_CHIPS && (
+                  <a
+                    href={`/watch?v=${encodeURIComponent(episodes[MAX_EP_CHIPS].id)}`}
+                    onClick={(e) => openEpisode(e, episodes[MAX_EP_CHIPS])}
+                    className="yt-card-ep-chip more"
+                    title={`Xem tiếp từ ${epLabel(episodes[MAX_EP_CHIPS], MAX_EP_CHIPS)}`}
+                  >
+                    +{episodes.length - MAX_EP_CHIPS}
+                  </a>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

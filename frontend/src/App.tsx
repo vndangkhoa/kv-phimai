@@ -15,6 +15,7 @@ import {
   genreMatch,
   getEpisodeInfo,
   getSeriesEpisodes,
+  stackSeriesForGrid,
   viewsNumber,
 } from './utils/phimaiUtils';
 
@@ -394,7 +395,9 @@ export function App() {
   }, []);
 
   const handleOpenWatch = useCallback(
-    (film: Film, seekSec = 0) => {
+    (picked: Film, seekSec = 0) => {
+      // Stacked grid cards carry merged rank/views; open the real first episode instead.
+      const film = picked.stackedEpisodes?.[0] ?? picked;
       setIsSidebarOpen(false);
       setActiveFilm(film);
       setWatchVideoId(film.id);
@@ -485,8 +488,11 @@ export function App() {
     return list;
   }, [allFilms, filters, savedIds, historyIds, hotCounts]);
 
-  const visibleFilms = useMemo(() => filteredFilms.slice(0, shownCount), [filteredFilms, shownCount]);
-  const hasMore = shownCount < filteredFilms.length;
+  // Home grid: every multi-episode series collapsed into one stacked card.
+  const gridFilms = useMemo(() => stackSeriesForGrid(filteredFilms), [filteredFilms]);
+
+  const visibleFilms = useMemo(() => gridFilms.slice(0, shownCount), [gridFilms, shownCount]);
+  const hasMore = shownCount < gridFilms.length;
 
   useEffect(() => {
     if (routeView !== 'home' || !hasMore) return;
@@ -495,14 +501,14 @@ export function App() {
     const obs = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
-          setShownCount((c) => Math.min(filteredFilms.length, c + 24));
+          setShownCount((c) => Math.min(gridFilms.length, c + 24));
         }
       },
       { rootMargin: '320px' }
     );
     obs.observe(el);
     return () => obs.disconnect();
-  }, [routeView, hasMore, filteredFilms.length]);
+  }, [routeView, hasMore, gridFilms.length]);
 
   const categories = useMemo(() => {
     if (Object.keys(manifestCategories).length > 0) return manifestCategories;
@@ -545,9 +551,15 @@ export function App() {
     }
   };
 
+  // Position of the active film in the stacked grid (matches its series stack too).
   const currentFilmIndex = useMemo(
-    () => (activeFilm ? filteredFilms.findIndex((f) => f.id === activeFilm.id) : -1),
-    [activeFilm, filteredFilms]
+    () =>
+      activeFilm
+        ? gridFilms.findIndex(
+            (f) => f.id === activeFilm.id || Boolean(f.stackedEpisodes?.some((ep) => ep.id === activeFilm.id))
+          )
+        : -1,
+    [activeFilm, gridFilms]
   );
 
   const activeSeriesEpisodes = useMemo(
@@ -599,17 +611,18 @@ export function App() {
     }
 
     // 2. After finishing the last episode (or on standalone films), advance to the next different film
-    if (filteredFilms.length === 0) return;
+    if (gridFilms.length === 0) return;
     const sameSeriesIds = new Set(activeSeriesEpisodes.map((e) => e.id));
     const startIdx = currentFilmIndex >= 0 ? currentFilmIndex : -1;
-    for (let offset = 1; offset <= filteredFilms.length; offset++) {
-      const cand = filteredFilms[(startIdx + offset) % filteredFilms.length];
-      if (cand.id !== activeFilm.id && !sameSeriesIds.has(cand.id)) {
+    for (let offset = 1; offset <= gridFilms.length; offset++) {
+      const cand = gridFilms[(startIdx + offset) % gridFilms.length];
+      const candIds = cand.stackedEpisodes ? cand.stackedEpisodes.map((ep) => ep.id) : [cand.id];
+      if (!candIds.includes(activeFilm.id) && !candIds.some((id) => sameSeriesIds.has(id))) {
         handleOpenWatch(cand, 0);
         return;
       }
     }
-  }, [activeFilm, activeSeriesEpisodes, filteredFilms, currentFilmIndex, handleOpenWatch]);
+  }, [activeFilm, activeSeriesEpisodes, gridFilms, currentFilmIndex, handleOpenWatch]);
 
   const handlePrevFilm = useCallback(() => {
     if (!activeFilm) return;
@@ -621,10 +634,10 @@ export function App() {
         return;
       }
     }
-    if (filteredFilms.length === 0) return;
-    const prevIdx = currentFilmIndex > 0 ? currentFilmIndex - 1 : filteredFilms.length - 1;
-    handleOpenWatch(filteredFilms[prevIdx], 0);
-  }, [activeFilm, activeSeriesEpisodes, filteredFilms, currentFilmIndex, handleOpenWatch]);
+    if (gridFilms.length === 0) return;
+    const prevIdx = currentFilmIndex > 0 ? currentFilmIndex - 1 : gridFilms.length - 1;
+    handleOpenWatch(gridFilms[prevIdx], 0);
+  }, [activeFilm, activeSeriesEpisodes, gridFilms, currentFilmIndex, handleOpenWatch]);
 
   const isWatchMode = routeView === 'watch' && Boolean(activeFilm);
 
@@ -760,7 +773,7 @@ export function App() {
             {(filters.query || filters.channel || filters.sort === 'saved' || filters.sort === 'history') && (
               <div style={{ marginBottom: '14px', fontSize: '13.5px', color: 'var(--yt-text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span>
-                  Tìm thấy <strong style={{ color: 'var(--yt-text-primary)' }}>{filteredFilms.length}</strong> bộ phim
+                  Tìm thấy <strong style={{ color: 'var(--yt-text-primary)' }}>{gridFilms.length}</strong> bộ phim
                   {filters.channel ? ` từ kênh "${filters.channel}"` : ''}
                   {filters.query ? ` cho "${filters.query}"` : ''}
                 </span>
@@ -813,7 +826,7 @@ export function App() {
                       onClick={() => setShownCount((c) => c + 30)}
                       className="watch-action-pill"
                     >
-                      Tải thêm phim ({filteredFilms.length - visibleFilms.length} phim còn lại)
+                      Tải thêm phim ({gridFilms.length - visibleFilms.length} phim còn lại)
                     </button>
                   </div>
                 )}

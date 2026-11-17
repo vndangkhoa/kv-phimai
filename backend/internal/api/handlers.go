@@ -89,7 +89,7 @@ func (h *Handler) GetHealth(w http.ResponseWriter, r *http.Request) {
 		"status":       "healthy",
 		"ok":           true,
 		"service":      "phimai",
-		"version":      "1.0.9",
+		"version":      "1.0.10",
 		"warpActive":   h.KVTube.IsWarpActive(),
 		"warpProxy":    h.KVTube.WarpProxyURL,
 		"totalFilms":   totalFilms,

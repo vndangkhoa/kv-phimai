@@ -525,10 +525,12 @@ const PART_RES: Array<[RegExp, string]> = [
   [/\bmua\s*(\d+)\b/, 'num'],
   [/\btap\s*(\d+)\s*[-+]\s*(\d+)\b/, 'range'],
   [/\btap\s*(\d+)\b/, 'num'],
+  [/\bepisode\s*(\d+)\s*[-+]\s*(\d+)\b/, 'range'],
+  [/\bepisode\s*(\d+)\b/, 'num'],
   [/\bep\s*(\d+)\s*[-+]\s*(\d+)\b/, 'range'],
   [/\bep\s*(\d+)\b/, 'num'],
 ];
-const COMPLETE_RES = [/\bfull\b/g, /tron bo/g, /ban full/g, /\bcomplete\b/g];
+const COMPLETE_RES = [/\bfull\b/g, /tron bo/g, /ban full/g, /\bcomplete\b/g, /\bfinal\b/g];
 const GENERIC_WORDS = new Set(
   'ai movie film short horror thriller fantasy scifi sci fi supernatural epic adventure drama animation animated generated hollywood style official trailer teaser festival global series episode season part end bo tron ban full complete dai the a an of'.split(' ')
 );
@@ -661,6 +663,20 @@ export function isBlockedEpisodeTitle(title: string): boolean {
   return BLOCKED_EPISODE_PHRASES.some((phrase) => n.includes(phrase));
 }
 
+/** Full episodes ("Tập 02", "Episode 2") outrank clips/parts ("Phần 02") sharing the same number. */
+function episodeKindScore(title: string): number {
+  return /\b(?:tap|episode|ep)\s*\d/.test(normSeries(title)) ? 1 : 0;
+}
+
+/** True when `cand` should replace `cur` as the representative of an episode number. */
+function prefersEpisode(cand: Film, cur: Film, activeFilmId?: string): boolean {
+  if (cand.id === activeFilmId) return true;
+  if (cur.id === activeFilmId) return false;
+  const kindDiff = episodeKindScore(cand.title) - episodeKindScore(cur.title);
+  if (kindDiff !== 0) return kindDiff > 0;
+  return viewsNumber(cand) > viewsNumber(cur);
+}
+
 export function dedupeAndContiguousEpisodes(films: Film[], activeFilmId?: string): Film[] {
   const seenIds = new Set<string>();
   const byEpNum = new Map<number, Film>();
@@ -677,11 +693,7 @@ export function dedupeAndContiguousEpisodes(films: Film[], activeFilmId?: string
     }
 
     const existing = byEpNum.get(epNum);
-    if (
-      !existing ||
-      f.id === activeFilmId ||
-      (existing.id !== activeFilmId && viewsNumber(f) > viewsNumber(existing))
-    ) {
+    if (!existing || prefersEpisode(f, existing, activeFilmId)) {
       byEpNum.set(epNum, f);
     }
   }
@@ -735,6 +747,69 @@ export function getSeriesEpisodes(film: Film, allFilms: Film[]): Film[] {
   const ordered = dedupeAndContiguousEpisodes(candidates, film.id);
   if (ordered.length < 2 && info.epNum === null) return [];
   return ordered.slice(0, 120);
+}
+
+/**
+ * Grid stacking key for an episodic film. Long (>= 3 word) series names are
+ * channel-independent so e.g. "Triều Tuyết Lục - Tập 34" and
+ * "Trieu Tuyet Luc - Episode 38 (Final)" land in the same stack.
+ */
+function gridStackKey(film: Film): string {
+  if (!film?.title || isBlockedEpisodeTitle(film.title)) return '';
+  const info = getEpisodeInfo(film.title, film.channel);
+  if (info.epNum === null || !info.baseKey) return '';
+  if (info.baseKey.split(' ').length >= 3) return info.baseKey;
+  return `${info.baseKey}||${normSeries(film.channel || '')}`;
+}
+
+/**
+ * Collapse every multi-episode series in `films` into a single card, kept at the
+ * position of its first (highest-sorted) member. The card opens the lowest
+ * episode, carries the newest rank / highest views of the group, and exposes all
+ * episodes (ascending) via `stackedEpisodes`.
+ */
+export function stackSeriesForGrid(films: Film[]): Film[] {
+  const groups = new Map<string, Film[]>();
+  const order: Array<{ key: string; film?: Film }> = [];
+
+  for (const f of films) {
+    const key = gridStackKey(f);
+    if (!key) {
+      order.push({ key: '', film: f });
+      continue;
+    }
+    const members = groups.get(key);
+    if (members) {
+      members.push(f);
+    } else {
+      groups.set(key, [f]);
+      order.push({ key });
+    }
+  }
+
+  return order.map(({ key, film }) => {
+    if (!key) return film as Film;
+    const members = groups.get(key) as Film[];
+    if (members.length < 2) return members[0];
+
+    // One film per episode number, ascending.
+    const byEp = new Map<number, Film>();
+    for (const m of members) {
+      const ep = getEpisodeNumber(m) ?? 9999;
+      const prev = byEp.get(ep);
+      if (!prev || prefersEpisode(m, prev)) byEp.set(ep, m);
+    }
+    const episodes = [...byEp.entries()].sort((a, b) => a[0] - b[0]).map(([, m]) => m);
+    if (episodes.length < 2) return episodes[0];
+
+    const topViews = members.reduce((best, m) => (viewsNumber(m) > viewsNumber(best) ? m : best), members[0]);
+    return {
+      ...episodes[0],
+      rank: Math.max(...members.map((m) => m.rank || 0)),
+      views: topViews.views,
+      stackedEpisodes: episodes,
+    };
+  });
 }
 
 // 18+ age verification helpers (device-local)
