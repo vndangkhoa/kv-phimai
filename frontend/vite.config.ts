@@ -23,9 +23,12 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'lucide-react'],
-          hls: ['hls.js'],
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('/hls.js/')) return 'hls'
+          if (id.includes('/@astryxdesign/') || id.includes('/@stylexjs/')) return 'astryx'
+          if (/\/node_modules\/(react|react-dom|scheduler|lucide-react)\//.test(id)) return 'vendor'
+          return undefined
         },
       },
     },

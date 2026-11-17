@@ -5,6 +5,11 @@ export default {
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
   darkMode: 'class',
+  // Preflight lives in a native cascade layer (src/theme/preflight.css) so it
+  // sits below Astryx's component layer instead of outranking it.
+  corePlugins: {
+    preflight: false,
+  },
   theme: {
     extend: {
       fontFamily: {

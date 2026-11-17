@@ -172,17 +172,59 @@ Depth is communicated through tonal surface stepping (`#0d0e14` -> `#161822` -> 
 - **Elevated Slate Action (`#161822`):** `1px solid` hairline border for header quick actions (`Trợ Lý AI`, `Lướt Phim Dọc`, `Xem Chung & TV`, `KV-Tube`).
 
 ### Cards / Containers
-- **16:9 Noir Film Card (`.noir-card`):** Flush 16:9 thumbnail header with top-left AI model + `#rank` badges, top-right bookmark toggle, bottom-left view count, bottom-right tabular duration pill, body with title/studio/synopsis, and a distinct footer bar with `Chiếu Phim`, `Xem chung`, and `KV-Tube` actions.
+- **16:9 Noir Film Card (`.noir-card`):** Flush 16:9 thumbnail header with top-left AI model + `#rank` badges, top-right bookmark toggle, bottom-left view count, bottom-right tabular duration pill, body with title/studio/synopsis, and a distinct footer bar with `Chiếu Phim` (crimson), a `Xem chung` icon button (tooltip), and a `KV-Tube` link.
 
 ## Do's and Don'ts
 
 ### Do:
 - **Do** route all video streams, thumbnails, and external watch links through `https://u.khoavo.vndns.net` and local `/api/kvtube/*` endpoints.
 - **Do** apply `font-variant-numeric: tabular-nums` to all film ranks (`#9450`), Top 10 counters, durations, and filter badge counts.
-- **Do** use authored inline SVGs with consistent `1.75` stroke weight for all icons and controls.
+- **Do** draw every icon from one stroke system: `lucide-react` at `strokeWidth={1.75}` (or an authored inline SVG on the same `1.75` geometry, like the film-frame brand mark).
 - **Do** place metadata badges, ranks, and AI model tags below headings or in card overlays rather than as eyebrow kickers above headings.
 
 ### Don't:
 - **Don't** embed `youtube.com` or `youtube-nocookie.com` iframes or link directly to Google video servers anywhere in the interface.
 - **Don't** place small uppercase eyebrow/kicker labels directly above `<h1>`, `<h2>`, `<h3>`, or `<h4>` elements.
 - **Don't** use CSS gradient text (`background-clip: text`), thick colored side borders (`border-left` > 1px), or emoji/Unicode glyphs as UI icons.
+
+## Astryx Foundation (Meta Astryx 0.7.16)
+
+The UI is built on Meta's Astryx design system (`@astryxdesign/core`, React 19 + StyleX, pre-built CSS). The KV-Cinema Sovereign world is unchanged: Astryx supplies accessible primitives and the app shell, and a custom theme repaints them in the Noir palette.
+
+### Wiring
+- **Theme source:** `frontend/src/theme/cinemaNoirTheme.ts` (`defineTheme({extends: neutralTheme, name: 'cinema-noir', ...})`). Generated with `npx @astryxdesign/cli theme build src/theme/cinemaNoirTheme.ts` into `cinema-noir.{css,js,d.ts}`. Rebuild after every edit; never hand-edit the generated files.
+- **Provider:** `src/main.tsx` wraps `<App />` in `<Theme theme={cinemaNoirTheme} mode="dark">`. The theme is dark-only. The root Theme syncs `data-astryx-theme="cinema-noir"` onto `<html>`, so portaled Dialogs and Drawers inherit it.
+- **Cascade (src/index.css, loaded first):** `@layer reset, tw-preflight, astryx-base, astryx-theme;` then Astryx `reset.css`, the Tailwind v3 preflight moved into the native `tw-preflight` layer (`src/theme/preflight.css`, with `corePlugins.preflight: false`), Astryx `astryx.css`, and `cinema-noir.css`. Tailwind utilities and the world CSS (`src/interfaces/interfaces.css`) stay unlayered, so `className` overrides beat Astryx defaults while Astryx beats the preflight.
+- **Touch targets:** below `1024px` (or on any coarse pointer) `--size-element-sm/md/lg` become `46/46/48px`, and text inputs and selector triggers stretch to fill their control, so every hit area is at least 44px.
+
+### Token mapping
+| Astryx token | KV-Cinema value |
+| --- | --- |
+| `--color-background-body` | Obsidian Void `#0d0e14` |
+| `--color-background-surface` / `-card` | Screening Slate `#161822` |
+| `--color-background-popover` | Slate Raised `#1e2130` |
+| `--color-accent` / `--color-text-accent` / `--color-icon-accent` | Tungsten Gold `#ffd875` |
+| `--color-on-accent` | `#0d0e14` |
+| `--color-accent-muted` | `rgba(255, 216, 117, 0.16)` |
+| `--color-text-primary` / `-secondary` / `-disabled` | Ivory `#f4f4f6` / `#c4c8d9` / `#6b7189` |
+| `--color-border` / `--color-border-emphasized` | `rgba(244, 244, 246, 0.11)` / `rgba(244, 244, 246, 0.24)` |
+| `--color-error` (+ `--color-background-error-inverted`) | Cinema Crimson `#e50914`, ink `#ffffff` |
+| `--color-text-error` / `--color-border-error` | Crimson Soft `#ff6b72` |
+| `--color-success` | Signal Emerald `#10b981` |
+| `--color-warning` | Tungsten Amber `#e6b949` |
+| `--color-overlay` | `rgba(4, 5, 10, 0.78)` |
+| `--radius-inner` / `-element` / `-container` / `-page` | `6px` / `8px` / `12px` / `16px` |
+| `--shadow-low` / `-med` / `-high` | offset ambient shadows (`0 4px 12px -4px`, `0 14px 34px -10px`, `0 24px 64px -16px`) |
+| Typography | body `Be Vietnam Pro` (15px base, 1.2 ratio), heading `Big Shoulders Display`, code `JetBrains Mono` |
+
+Crimson is the cinema CTA, not Astryx's `primary`: Astryx `primary` paints gold. Crimson play buttons use the `kv-cta--crimson` class on an Astryx `Button`.
+
+### Components in use (main page)
+`AppShell` (`height="auto"`, `mobileNav` breakpoint `lg`, custom `MobileNav` drawer, `MobileNavToggle`), `TopNav`, `Button`, `IconButton`, `ToggleButton` (filter chips, sidebar toggle), `TextInput` (search, wall nickname), `TextArea`, `Selector` (mood and duration, `presentation="adaptive"`), `TabList`/`Tab` (Top 10 / Community), `Badge` (18+, MARATHON), `Heading`, `Text`, `Grid` (`columns={{minWidth: 272, max: 4}}`), `HStack`/`VStack`, `Divider`, and the `useMediaQuery` hook.
+
+### Responsive contract
+- **≥1440:** full labelled header action row. **1024–1439:** the same actions as icon-only buttons with tooltips. **<1024:** compact bar (logo, search trigger, menu), with the actions in the right-side `MobileNav` drawer. Search drops in as a sticky row under the header.
+- **Hero:** at ≥1024 a 7/5 split with the projection frame on the right. Below 1024 the frame comes first (2.39:1 from 640px, 16:9 on phones). On phones the crimson CTA is full width, `Ngẫu Nhiên` and `Lưu Vào Tủ` sit in a two-column group, and the KV-Tube link spans the row below.
+- **Reels, chip rows, hero strip:** horizontal `scroll-snap-type: x mandatory` tracks inside their own scroller. Reel cards are `min(78–84vw, 270–310px)` wide. Filter chip rows wrap from 1024px up.
+- **Sidebar:** a sticky 300–360px column at ≥1024 (toggle hides it). Below 1024 it stacks under the film grid as a full-width section, which the drawer's `Xếp Hạng & Cộng Đồng` entry scrolls to.
+- Checked with no horizontal page overflow at 360, 390, 768, 1024, 1280, 1440, and 1920.

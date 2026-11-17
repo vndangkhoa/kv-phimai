@@ -1,27 +1,33 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import {
-  X,
-  ExternalLink,
   Bookmark,
   BookmarkCheck,
-  Star,
-  Clock,
-  Share2,
-  Download,
-  Users,
-  MessageSquare,
-  Layers,
-  Play,
-  ShieldAlert,
-  Sparkles,
-  Tv,
-  Film as FilmIcon,
   Check,
-  Copy,
-  Smartphone,
   ChevronRight,
+  Clock,
+  Copy,
+  Download,
+  ExternalLink,
+  Layers,
+  MessageSquare,
+  Play,
+  Send,
+  Share2,
+  ShieldAlert,
+  Smartphone,
+  Sparkles,
+  Star,
+  Tv,
+  Users,
 } from 'lucide-react';
+import { Dialog } from '@astryxdesign/core/Dialog';
+import { Button } from '@astryxdesign/core/Button';
+import { IconButton } from '@astryxdesign/core/IconButton';
+import { Selector } from '@astryxdesign/core/Selector';
+import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
+import { TextInput } from '@astryxdesign/core/TextInput';
+import { Badge } from '@astryxdesign/core/Badge';
 import type { Film, KVTubeStreamInfo } from '../types/phimai';
 import {
   CAT_LABEL,
@@ -29,7 +35,6 @@ import {
   calculateAge,
   formatClock,
   formatViewsVN,
-  getFallbackThumbUrl,
   getKVTubeEmbedUrl,
   getKVTubeStreamUrl,
   getKVTubeWatchUrl,
@@ -38,6 +43,11 @@ import {
   isAgeVerified,
   markAgeVerified,
 } from '../utils/phimaiUtils';
+import { FilmThumb } from './FilmThumb';
+import { OverlayHeader } from './OverlayHeader';
+import { drawShareCard } from './shareCard';
+import { PHONE_QUERY, useMediaQuery } from './useMediaQuery';
+import './overlays.css';
 
 export interface PlayerModalProps {
   film: Film | null;
@@ -63,7 +73,44 @@ interface CommentItem {
   m?: { n?: string; l?: string; p?: string };
 }
 
-export const PlayerModal: React.FC<PlayerModalProps> = ({
+const ICON = { className: 'h-4 w-4 shrink-0', strokeWidth: 1.75 } as const;
+const SLEEP_OPTIONS = [0, 15, 30, 60];
+const EMBED_VALUE = 'embed';
+
+/**
+ * Cinema player overlay. Astryx Dialog supplies the native modal (focus trap,
+ * Escape, focus return); on phones it becomes a full-screen sheet with the
+ * 16:9 player pinned to the top of the scrolling body.
+ */
+export const PlayerModal: React.FC<PlayerModalProps> = (props) => {
+  const isPhone = useMediaQuery(PHONE_QUERY);
+  const { film, onClose } = props;
+
+  return (
+    <Dialog
+      isOpen={film !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      variant={isPhone ? 'fullscreen' : 'standard'}
+      width={1240}
+      maxHeight="94dvh"
+      padding={0}
+      purpose="form"
+      className="kv-overlay"
+      data-testid="player-modal"
+    >
+      {film ? <PlayerBody {...props} film={film} isPhone={isPhone} /> : null}
+    </Dialog>
+  );
+};
+
+interface PlayerBodyProps extends PlayerModalProps {
+  film: Film;
+  isPhone: boolean;
+}
+
+const PlayerBody: React.FC<PlayerBodyProps> = ({
   film,
   allFilms,
   savedIds,
@@ -76,34 +123,35 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   onOpenSwipeFeed,
   activePartyCode,
   isPartyHost,
+  isPhone,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const shareCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [streamInfo, setStreamInfo] = useState<KVTubeStreamInfo | null>(null);
   const [selectedSource, setSelectedSource] = useState<string>('');
-  const [selectedQualityLabel, setSelectedQualityLabel] = useState<string>('360p MP4 (Mặc định)');
+  const [selectedQualityLabel, setSelectedQualityLabel] = useState<string>('360p MP4');
   const [useEmbedFallback, setUseEmbedFallback] = useState<boolean>(false);
   const [loadingStream, setLoadingStream] = useState<boolean>(false);
   const [fullBlurbFilm, setFullBlurbFilm] = useState<Film | null>(null);
   const [apiEpisodes, setApiEpisodes] = useState<Film[]>([]);
 
-  // Age gate state
-  const [needsAgeGate, setNeedsAgeGate] = useState<boolean>(false);
+  // Age gate
+  const [needsAgeGate, setNeedsAgeGate] = useState<boolean>(() => Boolean(film.adult && !isAgeVerified()));
   const [dobDay, setDobDay] = useState<string>('');
   const [dobMonth, setDobMonth] = useState<string>('');
   const [dobYear, setDobYear] = useState<string>('');
   const [ageError, setAgeError] = useState<string>('');
 
-  // Sleep timer state
+  // Sleep timer
   const [sleepMinutes, setSleepMinutes] = useState<number>(0);
   const [sleepRemainingSec, setSleepRemainingSec] = useState<number>(0);
 
-  // Rating state
+  // Rating
   const [myRating, setMyRating] = useState<number>(0);
   const [ratingStatus, setRatingStatus] = useState<string>('');
 
-  // Comments state
+  // Comments
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [loadingComments, setLoadingComments] = useState<boolean>(false);
   const [commentText, setCommentText] = useState<string>('');
@@ -116,14 +164,13 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   });
   const [attachedTimestamp, setAttachedTimestamp] = useState<number | null>(null);
 
-  // Share Card state
+  // Share card
   const [showShareCard, setShowShareCard] = useState<boolean>(false);
   const [shareCardStatus, setShareCardStatus] = useState<string>('');
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
 
-  // Check age gate whenever film changes
+  // Age gate check whenever the film changes
   useEffect(() => {
-    if (!film) return;
     if (film.adult && !isAgeVerified()) {
       setNeedsAgeGate(true);
       setAgeError('');
@@ -132,13 +179,13 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     }
   }, [film]);
 
-  // Load film details + KV-Tube stream metadata + comments
+  // Film details + KV-Tube stream metadata + comments
   useEffect(() => {
-    if (!film || needsAgeGate) return;
+    if (needsAgeGate) return;
 
     const defaultDirectUrl = getKVTubeStreamUrl(film.id);
     setSelectedSource(defaultDirectUrl);
-    setSelectedQualityLabel('360p MP4 (KV-Tube Direct)');
+    setSelectedQualityLabel('360p MP4');
     setUseEmbedFallback(false);
     setStreamInfo(null);
     setFullBlurbFilm(film);
@@ -154,7 +201,6 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
       setMyRating(0);
     }
 
-    // Record view
     fetch('/api/view', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -164,7 +210,6 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     let cancelled = false;
     setLoadingStream(true);
 
-    // Fetch KV-Tube video stream info
     fetch(`/api/kvtube/video/${encodeURIComponent(film.id)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
@@ -173,7 +218,8 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
           id: film.id,
           watchUrl: data.watchUrl || getKVTubeWatchUrl(film.id),
           embedUrl: data.embedUrl || getKVTubeEmbedUrl(film.id),
-          channelUrl: data.channelUrl || `${KVTUBE_ORIGIN}/results?search_query=${encodeURIComponent(film.channel)}`,
+          channelUrl:
+            data.channelUrl || `${KVTUBE_ORIGIN}/results?search_query=${encodeURIComponent(film.channel)}`,
           thumbnailUrl: data.thumbnailUrl || getThumbUrl(film.id),
           hlsUrl: data.hlsUrl,
           dashUrl: data.dashUrl,
@@ -195,7 +241,6 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
         if (!cancelled) setLoadingStream(false);
       });
 
-    // Fetch extended film details + series episodes from backend
     fetch(`/api/films/${encodeURIComponent(film.id)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
@@ -213,7 +258,6 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
       })
       .catch(() => {});
 
-    // Fetch comments
     setLoadingComments(true);
     fetch(`/api/comments?id=${encodeURIComponent(film.id)}`)
       .then((r) => (r.ok ? r.json() : null))
@@ -233,19 +277,19 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     };
   }, [film, needsAgeGate]);
 
-  // Attach HLS or native src when selectedSource changes
+  // Attach HLS or native src when the source changes
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !selectedSource || useEmbedFallback || needsAgeGate) return;
 
     let hls: Hls | null = null;
-    const isHls = selectedSource.includes('.m3u8') || selectedSource.includes('hls_variant') || selectedSource.includes('hls_playlist');
+    const isHls =
+      selectedSource.includes('.m3u8') ||
+      selectedSource.includes('hls_variant') ||
+      selectedSource.includes('hls_playlist');
 
     if (isHls && Hls.isSupported()) {
-      hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: false,
-      });
+      hls = new Hls({ enableWorker: true, lowLatencyMode: false });
       hls.loadSource(selectedSource);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -257,13 +301,11 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     }
 
     return () => {
-      if (hls) {
-        hls.destroy();
-      }
+      if (hls) hls.destroy();
     };
   }, [selectedSource, useEmbedFallback, needsAgeGate]);
 
-  // Sleep timer countdown effect
+  // Sleep timer countdown
   useEffect(() => {
     if (sleepMinutes <= 0) {
       setSleepRemainingSec(0);
@@ -273,9 +315,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     const interval = setInterval(() => {
       setSleepRemainingSec((prev) => {
         if (prev <= 1) {
-          if (videoRef.current) {
-            videoRef.current.pause();
-          }
+          videoRef.current?.pause();
           setSleepMinutes(0);
           return 0;
         }
@@ -285,9 +325,9 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     return () => clearInterval(interval);
   }, [sleepMinutes]);
 
-  // Watch party sync effect
+  // Watch Party sync
   useEffect(() => {
-    if (!activePartyCode || !film || needsAgeGate) return;
+    if (!activePartyCode || needsAgeGate) return;
     const interval = setInterval(async () => {
       const video = videoRef.current;
       if (!video) return;
@@ -309,9 +349,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
           const j = await r.json();
           if (j.ok && j.filmId === film.id && typeof j.t === 'number') {
             const drift = Math.abs((video.currentTime || 0) - j.t);
-            if (drift > 5) {
-              video.currentTime = j.t;
-            }
+            if (drift > 5) video.currentTime = j.t;
             if (j.playing && video.paused) {
               video.play().catch(() => {});
             } else if (!j.playing && !video.paused) {
@@ -326,150 +364,22 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     return () => clearInterval(interval);
   }, [activePartyCode, isPartyHost, film, needsAgeGate]);
 
-  // Escape key to close
-  useEffect(() => {
-    if (!film) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [film, onClose]);
-
   const generateShareCard = useCallback(async () => {
-    if (!film || !shareCanvasRef.current) return;
     const canvas = shareCanvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    setShareCardStatus('Đang kết xuất thẻ chia sẻ 1080×1920...');
-
-    // Background
-    ctx.fillStyle = '#0d0e14';
-    ctx.fillRect(0, 0, 1080, 1920);
-
-    // Draw thumbnail
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    const loaded = await new Promise<boolean>((resolve) => {
-      img.onload = () => resolve(true);
-      img.onerror = () => resolve(false);
-      img.src = getThumbUrl(film.id);
-    });
-
-    if (loaded) {
-      try {
-        const scale = Math.max(1080 / img.width, 640 / img.height);
-        const sw = 1080 / scale;
-        const sh = 640 / scale;
-        const sx = (img.width - sw) / 2;
-        const sy = (img.height - sh) / 2;
-        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 1080, 640);
-      } catch {
-        ctx.fillStyle = '#161822';
-        ctx.fillRect(0, 0, 1080, 640);
-      }
-    } else {
-      ctx.fillStyle = '#161822';
-      ctx.fillRect(0, 0, 1080, 640);
-    }
-
-    // Accent bar
-    ctx.fillStyle = '#ffd875';
-    ctx.fillRect(64, 690, 140, 8);
-
-    // Rank & Category
-    ctx.fillStyle = '#ffd875';
-    ctx.font = 'bold 48px sans-serif';
-    ctx.fillText(`#${film.rank} • ${CAT_LABEL[film.cat] || 'Phim AI'}`, 64, 770);
-
-    // Title
-    ctx.fillStyle = '#f4f4f6';
-    ctx.font = 'bold 60px sans-serif';
-    const words = (film.title || '').split(/\s+/);
-    const lines: string[] = [];
-    let cur = '';
-    for (const w of words) {
-      const test = cur ? `${cur} ${w}` : w;
-      if (ctx.measureText(test).width > 950 && cur) {
-        lines.push(cur);
-        cur = w;
-      } else {
-        cur = test;
-      }
-    }
-    if (cur) lines.push(cur);
-
-    let y = 865;
-    lines.slice(0, 3).forEach((ln) => {
-      ctx.fillText(ln, 64, y);
-      y += 78;
-    });
-
-    // Blurb
-    ctx.fillStyle = '#b4b8c8';
-    ctx.font = '38px sans-serif';
-    y += 24;
-    const blurbWords = (film.blurb || '').split(/\s+/);
-    const blurbLines: string[] = [];
-    let bCur = '';
-    for (const w of blurbWords) {
-      const test = bCur ? `${bCur} ${w}` : w;
-      if (ctx.measureText(test).width > 950 && bCur) {
-        blurbLines.push(bCur);
-        bCur = w;
-      } else {
-        bCur = test;
-      }
-    }
-    if (bCur) blurbLines.push(bCur);
-    blurbLines.slice(0, 3).forEach((ln) => {
-      ctx.fillText(ln, 64, y);
-      y += 54;
-    });
-
-    // Tool & Channel metadata box
-    y += 40;
-    ctx.fillStyle = '#161822';
-    ctx.fillRect(64, y, 952, 190);
-    ctx.strokeStyle = 'rgba(255, 216, 117, 0.35)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(64, y, 952, 190);
-
-    ctx.fillStyle = '#ffd875';
-    ctx.font = 'bold 38px sans-serif';
-    ctx.fillText(`Công nghệ AI: ${film.tool || 'AI Studio'}`, 100, y + 75);
-
-    ctx.fillStyle = '#f4f4f6';
-    ctx.font = '34px sans-serif';
-    ctx.fillText(`Kênh: ${film.channel || 'KV-PhimAI'} • Thời lượng: ${film.dur || 'HD'}`, 100, y + 138);
-
-    // Footer Sovereign URL
-    ctx.fillStyle = '#ffd875';
-    ctx.font = 'bold 44px sans-serif';
-    ctx.fillText('KV-PhimAI • u.khoavo.vndns.net', 64, 1740);
-
-    ctx.fillStyle = '#b4b8c8';
-    ctx.font = '32px monospace';
-    ctx.fillText(getKVTubeWatchUrl(film.id), 64, 1805);
-
-    setShareCardStatus('Thẻ chia sẻ đã sẵn sàng — bấm Tải ảnh PNG để lưu về máy.');
+    if (!canvas) return;
+    setShareCardStatus('Đang kết xuất thẻ chia sẻ 1080×1920…');
+    const ok = await drawShareCard(canvas, film);
+    setShareCardStatus(
+      ok ? 'Thẻ chia sẻ đã sẵn sàng. Bấm Tải ảnh PNG để lưu về máy.' : 'Trình duyệt không hỗ trợ vẽ canvas.'
+    );
   }, [film]);
 
   useEffect(() => {
-    if (showShareCard && film) {
-      generateShareCard();
-    }
-  }, [showShareCard, film, generateShareCard]);
-
-  if (!film) return null;
+    if (showShareCard) generateShareCard();
+  }, [showShareCard, generateShareCard]);
 
   const displayFilm = fullBlurbFilm || film;
-  const seriesEpisodes =
-    apiEpisodes.length >= 2 ? apiEpisodes : getSeriesEpisodes(displayFilm, allFilms);
-
+  const seriesEpisodes = apiEpisodes.length >= 2 ? apiEpisodes : getSeriesEpisodes(displayFilm, allFilms);
   const relatedFilms = allFilms
     .filter((f) => f.id !== displayFilm.id && (f.cat === displayFilm.cat || f.channel === displayFilm.channel))
     .slice(0, 6);
@@ -479,19 +389,31 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
   const isSaved = savedIds.has(displayFilm.id);
   const kvtubeWatchUrl = streamInfo?.watchUrl || getKVTubeWatchUrl(displayFilm.id);
   const kvtubeEmbedUrl = streamInfo?.embedUrl || getKVTubeEmbedUrl(displayFilm.id);
+  const directUrl = getKVTubeStreamUrl(displayFilm.id);
+
+  // Quality options, de-duplicated by URL
+  const qualityOptions: Array<{ value: string; label: string }> = [];
+  const seen = new Set<string>();
+  const pushOption = (value: string | undefined, label: string) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    qualityOptions.push({ value, label });
+  };
+  pushOption(directUrl, 'Luồng trực tiếp KV-Tube (360p MP4)');
+  if (streamInfo?.hlsUrl) pushOption(streamInfo.hlsUrl, 'HLS thích ứng (u.khoavo.vndns.net)');
+  streamInfo?.streams?.forEach((s) => pushOption(s.url, `${s.quality} · ${s.container || s.type || 'MP4'}`));
+  if (selectedSource && !seen.has(selectedSource)) pushOption(selectedSource, selectedQualityLabel);
+  pushOption(EMBED_VALUE, 'Trình phát nhúng KV-Tube (/embed)');
 
   const handleAgeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const d = parseInt(dobDay, 10);
-    const m = parseInt(dobMonth, 10);
-    const y = parseInt(dobYear, 10);
-    const age = calculateAge(d, m, y);
+    const age = calculateAge(parseInt(dobDay, 10), parseInt(dobMonth, 10), parseInt(dobYear, 10));
     if (age === null) {
-      setAgeError('Ngày tháng năm sinh chưa hợp lệ. Vui lòng kiểm tra lại.');
+      setAgeError('Ngày sinh chưa hợp lệ. Kiểm tra lại ngày, tháng và năm (VD: 05 / 09 / 1998).');
       return;
     }
     if (age < 18) {
-      setAgeError('Bạn chưa đủ 18 tuổi để xem nội dung giới hạn độ tuổi này.');
+      setAgeError('Bạn chưa đủ 18 tuổi nên không thể xem phim giới hạn độ tuổi này.');
       return;
     }
     markAgeVerified();
@@ -505,6 +427,15 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     }
     const sec = Math.floor(videoRef.current?.currentTime || 0);
     setAttachedTimestamp(sec > 0 ? sec : 0);
+  };
+
+  const appendLocalComment = (text: string) => {
+    setComments((prev) => [
+      { t: text, s: attachedTimestamp || 0, d: 'vừa xong', m: { n: commentAuthor.trim() || 'Khán giả' } },
+      ...prev,
+    ]);
+    setCommentText('');
+    setAttachedTimestamp(null);
   };
 
   const handlePostComment = async (e: React.FormEvent) => {
@@ -530,37 +461,14 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
         }),
       });
       const j = await r.json().catch(() => ({ ok: false }));
-      if (r.ok && j.ok !== false) {
-        const newComment: CommentItem = {
-          t: text,
-          s: attachedTimestamp || 0,
-          d: 'vừa xong',
-          m: { n: commentAuthor.trim() || 'Khán giả' },
-        };
-        setComments((prev) => [newComment, ...prev]);
-        setCommentText('');
-        setAttachedTimestamp(null);
-      }
+      if (r.ok && j.ok !== false) appendLocalComment(text);
     } catch {
-      // fallback optimistic append
-      setComments((prev) => [
-        {
-          t: text,
-          s: attachedTimestamp || 0,
-          d: 'vừa xong',
-          m: { n: commentAuthor.trim() || 'Khán giả' },
-        },
-        ...prev,
-      ]);
-      setCommentText('');
-      setAttachedTimestamp(null);
+      appendLocalComment(text);
     }
   };
 
   const handleSeekTo = (sec: number) => {
-    if (useEmbedFallback) {
-      setUseEmbedFallback(false);
-    }
+    if (useEmbedFallback) setUseEmbedFallback(false);
     setTimeout(() => {
       if (videoRef.current) {
         videoRef.current.currentTime = sec;
@@ -579,7 +487,7 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
       // ignore
     }
     await onRateFilm(displayFilm.id, stars);
-    setRatingStatus(`Đã ghi nhận đánh giá ${stars}/5 sao của bạn.`);
+    setRatingStatus(`Đã ghi nhận ${stars}/5 sao của bạn.`);
   };
 
   const handleDownloadShareCard = () => {
@@ -606,629 +514,549 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
     }
   };
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/85 p-2 backdrop-blur-md sm:p-5"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Phát phim ${displayFilm.title}`}
-    >
-      <div className="relative my-auto flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-[#f4f4f6]/15 bg-[#0d0e14] text-[#f4f4f6] shadow-[0_24px_64px_rgba(0,0,0,0.85)]">
-        {/* Top Modal Bar */}
-        <div className="flex items-center justify-between gap-3 border-b border-[#f4f4f6]/10 bg-[#141722] px-4 py-3 sm:px-6">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span className="rounded bg-[#ffd875] px-2 py-0.5 text-xs font-bold text-[#0d0e14] tabular-nums">
-              #{displayFilm.rank}
-            </span>
-            {displayFilm.adult && (
-              <span className="rounded bg-[#e50914] px-2 py-0.5 text-xs font-bold text-white tabular-nums">
-                18+
+  const fullWidth = isPhone ? '100%' : undefined;
+
+  const header = (
+    <OverlayHeader
+      title={displayFilm.title}
+      subtitle={
+        <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-xs tabular-nums text-[#c4c8d9]">
+          <Badge variant="yellow" label={`#${displayFilm.rank}`} />
+          {displayFilm.adult && <Badge variant="error" label="18+" />}
+          <span className="font-semibold text-[#ffd875]">{displayFilm.channel}</span>
+          {displayFilm.dur && <span>{displayFilm.dur}</span>}
+        </span>
+      }
+      onClose={onClose}
+      closeLabel="Đóng trình phát"
+    />
+  );
+
+  if (needsAgeGate) {
+    return (
+      <div className="kv-frame">
+        {header}
+        <div className="kv-body kv-scroll px-4 py-6 sm:px-6 sm:py-10">
+          <form
+            onSubmit={handleAgeSubmit}
+            className="mx-auto w-full max-w-md rounded-2xl border border-[#e50914]/40 bg-[#161822] p-5 shadow-[0_14px_34px_-10px_rgba(4,5,10,0.72)] sm:p-6"
+            aria-labelledby="kv-agegate-title"
+            noValidate
+          >
+            <div className="flex items-center gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#e50914]/20 text-[#ff6b72]">
+                <ShieldAlert className="h-5 w-5" strokeWidth={1.75} aria-hidden="true" />
               </span>
-            )}
-            <h2 className="truncate text-base font-bold text-[#f4f4f6] sm:text-lg">
-              {displayFilm.title}
-            </h2>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            <a
-              href={kvtubeWatchUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[#ffd875]/40 bg-[#ffd875]/10 px-3 py-1.5 text-xs font-semibold text-[#ffd875] transition-colors hover:bg-[#ffd875]/20"
-            >
-              <span>Xem trên KV-Tube (u.khoavo.vndns.net)</span>
-              <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
-            </a>
-
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Đóng trình phát"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#f4f4f6]/15 bg-[#f4f4f6]/5 text-[#f4f4f6] transition-colors hover:bg-[#f4f4f6]/15"
-            >
-              <X className="h-4 w-4" strokeWidth={1.75} />
-            </button>
-          </div>
-        </div>
-
-        {/* Scrollable Content Body */}
-        <div className="overflow-y-auto p-4 sm:p-6">
-          {needsAgeGate ? (
-            /* 18+ Age Verification Gate */
-            <div className="mx-auto my-8 max-w-md rounded-xl border border-[#e50914]/40 bg-[#161822] p-6 text-center shadow-[0_12px_32px_rgba(0,0,0,0.5)]">
-              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[#e50914]/20 text-[#e50914]">
-                <ShieldAlert className="h-6 w-6" strokeWidth={1.75} />
-              </div>
-              <h3 className="text-lg font-bold text-[#f4f4f6]">
-                Xác minh độ tuổi (18+)
+              <h3 id="kv-agegate-title" className="text-lg font-bold text-[#f4f4f6]">
+                Xác minh độ tuổi 18+
               </h3>
-              <p className="mt-2 text-sm text-[#c9cddc]">
-                Bộ phim <strong>{displayFilm.title}</strong> có nội dung dành cho khán giả từ đủ 18 tuổi trở lên. Vui lòng nhập ngày sinh để xác minh trên thiết bị của bạn (không lưu lên máy chủ).
-              </p>
-
-              <form onSubmit={handleAgeSubmit} className="mt-5 space-y-4">
-                <div className="grid grid-cols-3 gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    max={31}
-                    placeholder="Ngày (DD)"
-                    value={dobDay}
-                    onChange={(e) => setDobDay(e.target.value)}
-                    className="rounded-lg border border-[#f4f4f6]/20 bg-[#0d0e14] px-3 py-2 text-center text-sm text-[#f4f4f6] tabular-nums focus:border-[#ffd875] focus:outline-none"
-                    required
-                  />
-                  <input
-                    type="number"
-                    min={1}
-                    max={12}
-                    placeholder="Tháng (MM)"
-                    value={dobMonth}
-                    onChange={(e) => setDobMonth(e.target.value)}
-                    className="rounded-lg border border-[#f4f4f6]/20 bg-[#0d0e14] px-3 py-2 text-center text-sm text-[#f4f4f6] tabular-nums focus:border-[#ffd875] focus:outline-none"
-                    required
-                  />
-                  <input
-                    type="number"
-                    min={1920}
-                    max={new Date().getFullYear()}
-                    placeholder="Năm (YYYY)"
-                    value={dobYear}
-                    onChange={(e) => setDobYear(e.target.value)}
-                    className="rounded-lg border border-[#f4f4f6]/20 bg-[#0d0e14] px-3 py-2 text-center text-sm text-[#f4f4f6] tabular-nums focus:border-[#ffd875] focus:outline-none"
-                    required
-                  />
-                </div>
-
-                {ageError && (
-                  <p className="text-xs font-medium text-[#ff6b6b]">{ageError}</p>
-                )}
-
-                <div className="flex items-center justify-center gap-3 pt-2">
-                  <button
-                    type="submit"
-                    className="rounded-lg bg-[#ffd875] px-5 py-2 text-sm font-bold text-[#0d0e14] transition-colors hover:bg-[#ffe294]"
-                  >
-                    Xác nhận đủ 18 tuổi & Xem phim
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onClose}
-                    className="rounded-lg border border-[#f4f4f6]/20 px-4 py-2 text-sm text-[#c9cddc] hover:bg-[#f4f4f6]/10"
-                  >
-                    Đóng
-                  </button>
-                </div>
-              </form>
             </div>
-          ) : (
-            <>
-              {/* Video Stage */}
-              <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-[#f4f4f6]/15 bg-black">
-                {useEmbedFallback ? (
-                  <iframe
-                    src={kvtubeEmbedUrl}
-                    title={displayFilm.title}
-                    className="h-full w-full border-0"
-                    allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-                    allowFullScreen
-                  />
-                ) : (
-                  <video
-                    ref={videoRef}
-                    controls
-                    playsInline
-                    poster={getThumbUrl(displayFilm.id)}
-                    className="h-full w-full bg-black object-contain"
-                    onError={() => {
-                      // Try fallback direct stream if custom quality failed, else keep option to toggle KV-Tube embed
-                      const direct = getKVTubeStreamUrl(displayFilm.id);
-                      if (selectedSource !== direct) {
-                        setSelectedSource(direct);
-                        setSelectedQualityLabel('360p MP4 (Dự phòng KV-Tube)');
-                      }
-                    }}
-                  >
-                    {streamInfo?.captions?.map((cap) => (
-                      <track
-                        key={cap.languageCode + cap.label}
-                        kind="subtitles"
-                        srcLang={cap.languageCode}
-                        label={cap.label}
-                        src={cap.url}
-                      />
-                    ))}
-                  </video>
-                )}
-              </div>
+            <p className="mt-3 text-sm leading-relaxed text-[#c4c8d9]">
+              <strong className="text-[#f4f4f6]">{displayFilm.title}</strong> dành cho khán giả từ đủ 18 tuổi. Nhập
+              ngày sinh để xác minh ngay trên thiết bị này, dữ liệu không gửi lên máy chủ.
+            </p>
+            <div className="mt-5 grid grid-cols-3 gap-2 tabular-nums">
+              <TextInput
+                label="Ngày"
+                value={dobDay}
+                onChange={(v) => setDobDay(v.replace(/\D/g, '').slice(0, 2))}
+                inputMode="numeric"
+                placeholder="DD"
+                autoComplete="bday-day"
+                isRequired
+              />
+              <TextInput
+                label="Tháng"
+                value={dobMonth}
+                onChange={(v) => setDobMonth(v.replace(/\D/g, '').slice(0, 2))}
+                inputMode="numeric"
+                placeholder="MM"
+                autoComplete="bday-month"
+                isRequired
+              />
+              <TextInput
+                label="Năm"
+                value={dobYear}
+                onChange={(v) => setDobYear(v.replace(/\D/g, '').slice(0, 4))}
+                inputMode="numeric"
+                placeholder="YYYY"
+                autoComplete="bday-year"
+                isRequired
+              />
+            </div>
+            {ageError && (
+              <p role="alert" className="mt-3 text-sm font-medium text-[#ff6b72]">
+                {ageError}
+              </p>
+            )}
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+              <Button type="submit" variant="primary" label="Xác nhận đủ 18 tuổi" width="100%" />
+              <Button label="Đóng" variant="secondary" onClick={onClose} width={fullWidth} />
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
-              {/* Stream Control Strip: Quality Selector, KV-Tube Embed Toggle, Sleep Timer, Watch Party */}
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#f4f4f6]/10 bg-[#161822] px-3.5 py-2.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#ffd875]">
-                    <Tv className="h-3.5 w-3.5" strokeWidth={1.75} />
-                    <span>Nguồn phát KV-Tube:</span>
-                  </span>
+  return (
+    <div className="kv-frame">
+      {header}
 
-                  {/* Native HTML5 Quality Selector */}
-                  <select
-                    aria-label="Chọn chất lượng luồng phát KV-Tube"
-                    value={useEmbedFallback ? 'embed' : selectedSource}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val === 'embed') {
-                        setUseEmbedFallback(true);
-                      } else {
+      <div className="kv-body kv-scroll" data-testid="player-scroll">
+        <div className="sm:p-5 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)] lg:gap-6 lg:p-6">
+          {/* Player column */}
+          <div className="min-w-0">
+            <div className="kv-sticky-player relative aspect-video w-full overflow-hidden bg-black sm:rounded-xl sm:border sm:border-[#f4f4f6]/15">
+              {useEmbedFallback ? (
+                <iframe
+                  src={kvtubeEmbedUrl}
+                  title={`KV-Tube: ${displayFilm.title}`}
+                  className="h-full w-full border-0"
+                  allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                  allowFullScreen
+                />
+              ) : (
+                <video
+                  ref={videoRef}
+                  controls
+                  playsInline
+                  aria-label={`Trình phát: ${displayFilm.title}`}
+                  poster={getThumbUrl(displayFilm.id)}
+                  className="h-full w-full bg-black object-contain"
+                  onError={() => {
+                    if (selectedSource !== directUrl) {
+                      setSelectedSource(directUrl);
+                      setSelectedQualityLabel('360p MP4 (dự phòng)');
+                    }
+                  }}
+                >
+                  {streamInfo?.captions?.map((cap) => (
+                    <track
+                      key={cap.languageCode + cap.label}
+                      kind="subtitles"
+                      srcLang={cap.languageCode}
+                      label={cap.label}
+                      src={cap.url}
+                    />
+                  ))}
+                </video>
+              )}
+            </div>
+
+            <div className="space-y-4 px-4 pt-4 sm:px-0">
+              {/* Stream controls: source, embed fallback, sleep timer */}
+              <section
+                aria-label="Nguồn phát và hẹn giờ"
+                className="space-y-3 rounded-xl border border-[#f4f4f6]/10 bg-[#161822] p-3 sm:p-4"
+              >
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <div className="min-w-0 flex-1">
+                    <Selector
+                      label="Nguồn phát KV-Tube"
+                      options={qualityOptions}
+                      value={useEmbedFallback ? EMBED_VALUE : selectedSource}
+                      onChange={(val) => {
+                        if (val === EMBED_VALUE) {
+                          setUseEmbedFallback(true);
+                          return;
+                        }
                         setUseEmbedFallback(false);
                         setSelectedSource(val);
                         const found = streamInfo?.streams.find((s) => s.url === val);
-                        setSelectedQualityLabel(found ? found.quality : 'MP4 Direct');
-                      }
-                    }}
-                    className="rounded-md border border-[#f4f4f6]/20 bg-[#0d0e14] px-2.5 py-1 text-xs font-medium text-[#f4f4f6] tabular-nums focus:border-[#ffd875] focus:outline-none"
-                  >
-                    <option value={getKVTubeStreamUrl(displayFilm.id)}>
-                      Luồng trực tiếp /api/kvtube/stream ({selectedQualityLabel})
-                    </option>
-                    {streamInfo?.hlsUrl && (
-                      <option value={streamInfo.hlsUrl}>
-                        HLS Adaptive (u.khoavo.vndns.net)
-                      </option>
-                    )}
-                    {streamInfo?.streams?.map((s, idx) => (
-                      <option key={`${s.quality}-${idx}`} value={s.url}>
-                        {s.quality} ({s.container || s.type || 'MP4'})
-                      </option>
-                    ))}
-                    <option value="embed">
-                      Nhúng KV-Tube Player (u.khoavo.vndns.net/embed)
-                    </option>
-                  </select>
-
-                  <button
-                    type="button"
+                        setSelectedQualityLabel(found ? found.quality : 'MP4');
+                      }}
+                      startIcon={<Tv {...ICON} aria-hidden="true" />}
+                      presentation="adaptive"
+                      isLoading={loadingStream}
+                      width="100%"
+                    />
+                  </div>
+                  <Button
+                    label={useEmbedFallback ? 'Đang dùng trình phát nhúng' : 'Dùng trình phát nhúng'}
+                    variant={useEmbedFallback ? 'primary' : 'secondary'}
+                    aria-pressed={useEmbedFallback}
                     onClick={() => setUseEmbedFallback((v) => !v)}
-                    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
-                      useEmbedFallback
-                        ? 'border-[#ffd875] bg-[#ffd875] text-[#0d0e14]'
-                        : 'border-[#f4f4f6]/15 bg-[#0d0e14] text-[#c9cddc] hover:text-[#f4f4f6]'
-                    }`}
-                  >
-                    <Layers className="h-3.5 w-3.5" strokeWidth={1.75} />
-                    <span>{useEmbedFallback ? 'Đang dùng KV-Tube Embed' : 'Đổi sang KV-Tube Embed'}</span>
-                  </button>
-
-                  {loadingStream && (
-                    <span className="text-xs text-[#b4b8c8]">
-                      Đang đồng bộ luồng Invidious...
-                    </span>
-                  )}
+                    icon={<Layers {...ICON} aria-hidden="true" />}
+                    width={fullWidth}
+                    className="kv-touch"
+                  />
                 </div>
-
-                {/* Sleep Timer Controls */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Clock className="h-3.5 w-3.5 text-[#b4b8c8]" strokeWidth={1.75} />
-                  <span className="text-xs text-[#b4b8c8]">Hẹn giờ tắt:</span>
-                  {[15, 30, 60].map((min) => (
-                    <button
-                      key={min}
-                      type="button"
-                      onClick={() => setSleepMinutes(sleepMinutes === min ? 0 : min)}
-                      className={`rounded px-2 py-0.5 text-xs font-medium tabular-nums transition-colors ${
-                        sleepMinutes === min
-                          ? 'bg-[#ffd875] text-[#0d0e14] font-semibold'
-                          : 'bg-[#0d0e14] text-[#c9cddc] hover:bg-[#f4f4f6]/10'
-                      }`}
-                    >
-                      {min}p
-                    </button>
-                  ))}
+                {loadingStream && (
+                  <p role="status" className="text-xs text-[#c4c8d9]">
+                    Đang lấy danh sách luồng từ KV-Tube…
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <span id="kv-sleep-label" className="inline-flex items-center gap-1.5 text-xs font-medium text-[#c4c8d9]">
+                    <Clock className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+                    Hẹn giờ tắt
+                  </span>
+                  <SegmentedControl
+                    label="Hẹn giờ tắt phim"
+                    value={String(sleepMinutes)}
+                    onChange={(v) => setSleepMinutes(Number(v))}
+                    size="sm"
+                    layout={isPhone ? 'fill' : 'hug'}
+                    className="kv-seg-touch w-full tabular-nums sm:w-auto"
+                  >
+                    {SLEEP_OPTIONS.map((min) => (
+                      <SegmentedControlItem key={min} value={String(min)} label={min === 0 ? 'Tắt' : `${min} phút`} />
+                    ))}
+                  </SegmentedControl>
                   {sleepRemainingSec > 0 && (
-                    <span className="ml-1 rounded bg-[#10b981]/20 px-2 py-0.5 text-xs font-semibold text-[#10b981] tabular-nums">
+                    <span className="rounded-md bg-[#10b981]/15 px-2 py-1 text-xs font-semibold text-[#34d399] tabular-nums">
                       Tắt sau {formatClock(sleepRemainingSec)}
                     </span>
                   )}
                 </div>
+              </section>
+
+              {/* Primary actions: 2-column grid on phones, wrapping row above */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="group" aria-label="Thao tác với phim">
+                <Button
+                  label={isSaved ? 'Đã lưu' : 'Lưu xem sau'}
+                  variant={isSaved ? 'primary' : 'secondary'}
+                  aria-pressed={isSaved}
+                  onClick={() => onToggleSave(displayFilm.id)}
+                  icon={
+                    isSaved ? <BookmarkCheck {...ICON} aria-hidden="true" /> : <Bookmark {...ICON} aria-hidden="true" />
+                  }
+                  width="100%"
+                  className="kv-touch"
+                />
+                <Button
+                  label={activePartyCode ? `Phòng ${activePartyCode}` : 'Xem chung'}
+                  icon={<Users {...ICON} aria-hidden="true" />}
+                  onClick={() => onOpenWatchParty(displayFilm)}
+                  width="100%"
+                  className="kv-touch tabular-nums"
+                />
+                <Button
+                  label="Lướt dọc"
+                  icon={<Smartphone {...ICON} aria-hidden="true" />}
+                  onClick={() => {
+                    onClose();
+                    onOpenSwipeFeed(displayFilm);
+                  }}
+                  width="100%"
+                  className="kv-touch"
+                />
+                <Button
+                  label="Thẻ chia sẻ"
+                  aria-pressed={showShareCard}
+                  aria-controls="kv-share-card"
+                  onClick={() => setShowShareCard((v) => !v)}
+                  icon={<Share2 {...ICON} aria-hidden="true" />}
+                  width="100%"
+                  className="kv-touch"
+                />
+                <Button
+                  label={copiedLink ? 'Đã chép link' : 'Chép link'}
+                  icon={copiedLink ? <Check {...ICON} aria-hidden="true" /> : <Copy {...ICON} aria-hidden="true" />}
+                  onClick={handleCopyWatchLink}
+                  width="100%"
+                  className="kv-touch"
+                />
+                <Button
+                  label="Mở KV-Tube"
+                  tooltip="Xem trên KV-Tube (u.khoavo.vndns.net)"
+                  icon={<ExternalLink {...ICON} aria-hidden="true" />}
+                  href={kvtubeWatchUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  width="100%"
+                  className="kv-touch"
+                />
               </div>
+              <span className="sr-only" role="status">
+                {copiedLink ? 'Đã chép link KV-Tube vào bộ nhớ tạm.' : ''}
+              </span>
 
-              {/* Action Toolbar & Film Metadata */}
-              <div className="mt-5 grid grid-cols-1 gap-6 lg:grid-cols-3">
-                <div className="space-y-4 lg:col-span-2">
-                  {/* Primary Actions */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onToggleSave(displayFilm.id)}
-                      className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors ${
-                        isSaved
-                          ? 'bg-[#ffd875] text-[#0d0e14]'
-                          : 'border border-[#f4f4f6]/15 bg-[#161822] text-[#f4f4f6] hover:bg-[#f4f4f6]/10'
-                      }`}
-                    >
-                      {isSaved ? (
-                        <BookmarkCheck className="h-4 w-4" strokeWidth={1.75} />
-                      ) : (
-                        <Bookmark className="h-4 w-4" strokeWidth={1.75} />
-                      )}
-                      <span>{isSaved ? 'Đã lưu vào kho cá nhân' : 'Lưu xem sau'}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => onOpenWatchParty(displayFilm)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#10b981]/40 bg-[#10b981]/10 px-3.5 py-2 text-xs font-semibold text-[#10b981] transition-colors hover:bg-[#10b981]/20 tabular-nums"
-                    >
-                      <Users className="h-4 w-4" strokeWidth={1.75} />
-                      <span>
-                        {activePartyCode ? `Phòng xem chung: ${activePartyCode}` : 'Xem chung & Ghép đôi TV'}
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onClose();
-                        onOpenSwipeFeed(displayFilm);
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#f4f4f6]/15 bg-[#161822] px-3.5 py-2 text-xs font-semibold text-[#f4f4f6] transition-colors hover:bg-[#f4f4f6]/10"
-                    >
-                      <Smartphone className="h-4 w-4" strokeWidth={1.75} />
-                      <span>Chế độ lướt dọc</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setShowShareCard((v) => !v)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#f4f4f6]/15 bg-[#161822] px-3.5 py-2 text-xs font-semibold text-[#f4f4f6] transition-colors hover:bg-[#f4f4f6]/10"
-                    >
-                      <Share2 className="h-4 w-4" strokeWidth={1.75} />
-                      <span>Tạo thẻ chia sẻ QR</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleCopyWatchLink}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#f4f4f6]/15 bg-[#161822] px-3 py-2 text-xs font-medium text-[#c9cddc] transition-colors hover:text-[#f4f4f6]"
-                    >
-                      {copiedLink ? (
-                        <Check className="h-3.5 w-3.5 text-[#10b981]" strokeWidth={1.75} />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
-                      )}
-                      <span>{copiedLink ? 'Đã chép link KV-Tube' : 'Chép link'}</span>
-                    </button>
-                  </div>
-
-                  {/* Metadata Summary */}
-                  <div className="rounded-xl border border-[#f4f4f6]/10 bg-[#161822] p-4">
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-[#c9cddc] tabular-nums">
-                      <span className="font-semibold text-[#ffd875]">{displayFilm.channel}</span>
-                      <span>•</span>
-                      <span>{formatViewsVN(displayFilm.views)}</span>
-                      {displayFilm.dur && (
-                        <>
-                          <span>•</span>
-                          <span>Thời lượng: {displayFilm.dur}</span>
-                        </>
-                      )}
-                      <span>•</span>
-                      <span className="inline-flex items-center gap-1 rounded bg-[#f4f4f6]/10 px-2 py-0.5 text-[#f4f4f6]">
-                        <Sparkles className="h-3 w-3 text-[#ffd875]" strokeWidth={1.75} />
-                        <span>Công cụ AI: {displayFilm.tool || 'AI Studio'}</span>
-                      </span>
-                    </div>
-
-                    <p className="mt-3 text-sm leading-relaxed text-[#e2e4ed]">
-                      {displayFilm.blurbLong || displayFilm.blurb}
-                    </p>
-
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      <span className="rounded bg-[#ffd875]/15 px-2.5 py-0.5 text-xs font-medium text-[#ffd875]">
-                        {CAT_LABEL[displayFilm.cat] || displayFilm.cat}
-                      </span>
-                      {(displayFilm.tags || []).map((tag) => (
-                        <span
-                          key={tag}
-                          className="rounded border border-[#f4f4f6]/15 bg-[#0d0e14] px-2.5 py-0.5 text-xs text-[#c9cddc]"
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Share Card Generator Panel */}
-                  {showShareCard && (
-                    <div className="rounded-xl border border-[#ffd875]/30 bg-[#161822] p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <h3 className="text-sm font-bold text-[#f4f4f6]">
-                          Thẻ chia sẻ phim chuẩn Story (1080×1920)
-                        </h3>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={handleDownloadShareCard}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-[#ffd875] px-3 py-1.5 text-xs font-bold text-[#0d0e14] hover:bg-[#ffe294]"
-                          >
-                            <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
-                            <span>Tải ảnh PNG</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setShowShareCard(false)}
-                            className="rounded-lg border border-[#f4f4f6]/15 px-2.5 py-1.5 text-xs text-[#c9cddc] hover:text-[#f4f4f6]"
-                          >
-                            Thu gọn
-                          </button>
-                        </div>
-                      </div>
-                      <p className="mt-1 text-xs text-[#b4b8c8]">{shareCardStatus}</p>
-                      <div className="mt-3 flex justify-center">
-                        <canvas
-                          ref={shareCanvasRef}
-                          width={1080}
-                          height={1920}
-                          className="max-h-80 w-auto rounded-lg border border-[#f4f4f6]/15 shadow-lg"
-                        />
-                      </div>
-                    </div>
+              {/* Synopsis & metadata */}
+              <section aria-label="Thông tin phim" className="rounded-xl border border-[#f4f4f6]/10 bg-[#161822] p-4">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#c4c8d9] tabular-nums">
+                  <span className="font-semibold text-[#ffd875]">{displayFilm.channel}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{formatViewsVN(displayFilm.views)}</span>
+                  {displayFilm.dur && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>Thời lượng {displayFilm.dur}</span>
+                    </>
                   )}
-
-                  {/* Series Episodes Strip */}
-                  {seriesEpisodes.length >= 2 && (
-                    <div className="rounded-xl border border-[#f4f4f6]/10 bg-[#161822] p-4">
-                      <h3 className="text-sm font-bold text-[#f4f4f6] tabular-nums">
-                        Chuỗi tập cùng bộ ({seriesEpisodes.length} phần)
-                      </h3>
-                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
-                        {seriesEpisodes.map((ep) => {
-                          const isCurrent = ep.id === displayFilm.id;
-                          return (
-                            <button
-                              key={ep.id}
-                              type="button"
-                              onClick={() => onSelectFilm(ep)}
-                              className={`flex items-center gap-2.5 rounded-lg border p-2 text-left transition-colors ${
-                                isCurrent
-                                  ? 'border-[#ffd875] bg-[#ffd875]/15 text-[#ffd875]'
-                                  : 'border-[#f4f4f6]/10 bg-[#0d0e14] text-[#f4f4f6] hover:border-[#f4f4f6]/30'
-                              }`}
-                            >
-                              <img
-                                src={getThumbUrl(ep.id)}
-                                onError={(e) => {
-                                  const t = e.currentTarget;
-                                  if (!t.dataset.fallback) {
-                                    t.dataset.fallback = '1';
-                                    t.src = getFallbackThumbUrl(ep.id);
-                                  }
-                                }}
-                                alt={ep.title}
-                                className="h-12 w-20 shrink-0 rounded object-cover"
-                              />
-                              <div className="min-w-0 flex-1">
-                                <div className="line-clamp-2 text-xs font-semibold leading-snug">
-                                  {ep.title}
-                                </div>
-                                <div className="mt-0.5 text-[11px] text-[#b4b8c8] tabular-nums">
-                                  {ep.dur || 'HD'} {isCurrent ? '• Đang phát' : ''}
-                                </div>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                  <span className="inline-flex items-center gap-1 rounded-md bg-[#f4f4f6]/10 px-2 py-0.5 text-[#f4f4f6]">
+                    <Sparkles className="h-3 w-3 text-[#ffd875]" strokeWidth={1.75} aria-hidden="true" />
+                    {displayFilm.tool || 'AI Studio'}
+                  </span>
                 </div>
+                <p className="mt-3 max-w-[70ch] text-sm leading-relaxed text-[#e2e4ed]">
+                  {displayFilm.blurbLong || displayFilm.blurb}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  <span className="rounded-md bg-[#ffd875]/15 px-2.5 py-0.5 text-xs font-medium text-[#ffd875]">
+                    {CAT_LABEL[displayFilm.cat] || displayFilm.cat}
+                  </span>
+                  {(displayFilm.tags || []).map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-md border border-[#f4f4f6]/15 bg-[#0d0e14] px-2.5 py-0.5 text-xs text-[#c4c8d9]"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </section>
 
-                {/* Right Column: 5-Star Rating & Timestamped Comments */}
-                <div className="space-y-4">
-                  {/* 5-Star Rating Box */}
-                  <div className="rounded-xl border border-[#f4f4f6]/10 bg-[#161822] p-4">
-                    <h3 className="text-sm font-bold text-[#f4f4f6]">
-                      Chấm điểm bộ phim
+              {/* Share card generator */}
+              {showShareCard && (
+                <section
+                  id="kv-share-card"
+                  aria-labelledby="kv-share-title"
+                  className="rounded-xl border border-[#ffd875]/30 bg-[#161822] p-4"
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h3 id="kv-share-title" className="text-sm font-bold text-[#f4f4f6] tabular-nums">
+                      Thẻ chia sẻ khổ Story 1080×1920
                     </h3>
-                    <div className="mt-2.5 flex items-center gap-1.5">
-                      {[1, 2, 3, 4, 5].map((star) => {
-                        const active = (myRating || Math.round(avgStars)) >= star;
-                        return (
+                    <div className="grid grid-cols-2 gap-2 sm:flex">
+                      <Button
+                        label="Tải ảnh PNG"
+                        variant="primary"
+                        icon={<Download {...ICON} aria-hidden="true" />}
+                        onClick={handleDownloadShareCard}
+                        width={fullWidth}
+                        className="kv-touch"
+                      />
+                      <Button
+                        label="Thu gọn"
+                        variant="ghost"
+                        onClick={() => setShowShareCard(false)}
+                        width={fullWidth}
+                        className="kv-touch"
+                      />
+                    </div>
+                  </div>
+                  <p role="status" className="mt-2 text-xs text-[#c4c8d9]">
+                    {shareCardStatus}
+                  </p>
+                  <div className="mt-3 flex justify-center">
+                    <canvas
+                      ref={shareCanvasRef}
+                      width={1080}
+                      height={1920}
+                      role="img"
+                      aria-label={`Thẻ chia sẻ phim ${displayFilm.title}`}
+                      className="h-auto max-h-80 w-auto max-w-full rounded-lg border border-[#f4f4f6]/15 shadow-[0_14px_34px_-10px_rgba(4,5,10,0.72)]"
+                    />
+                  </div>
+                </section>
+              )}
+
+              {/* Series strip */}
+              {seriesEpisodes.length >= 2 && (
+                <section aria-labelledby="kv-series-title" className="rounded-xl border border-[#f4f4f6]/10 bg-[#161822] p-4">
+                  <h3 id="kv-series-title" className="text-sm font-bold text-[#f4f4f6] tabular-nums">
+                    Các tập cùng bộ ({seriesEpisodes.length} phần)
+                  </h3>
+                  <ol className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    {seriesEpisodes.map((ep) => {
+                      const isCurrent = ep.id === displayFilm.id;
+                      return (
+                        <li key={ep.id} className="min-w-0">
                           <button
-                            key={star}
                             type="button"
-                            onClick={() => handleRate(star)}
-                            aria-label={`Chấm ${star} sao`}
-                            className={`rounded-md p-1.5 transition-transform hover:scale-110 ${
-                              active ? 'text-[#ffd875]' : 'text-[#5a6075] hover:text-[#ffd875]/70'
+                            onClick={() => onSelectFilm(ep)}
+                            aria-current={isCurrent ? 'true' : undefined}
+                            className={`flex min-h-[56px] w-full items-center gap-2.5 rounded-lg border p-2 text-left transition-colors ${
+                              isCurrent
+                                ? 'border-[#ffd875] bg-[#ffd875]/15 text-[#ffd875]'
+                                : 'border-[#f4f4f6]/10 bg-[#0d0e14] text-[#f4f4f6] hover:border-[#f4f4f6]/30'
                             }`}
                           >
-                            <Star
-                              className="h-5 w-5"
-                              strokeWidth={1.75}
-                              fill={active ? 'currentColor' : 'none'}
-                            />
-                          </button>
-                        );
-                      })}
-                      <span className="ml-2 text-xs font-semibold text-[#ffd875] tabular-nums">
-                        {avgStars > 0 ? `${avgStars.toFixed(1)} / 5.0` : 'Chưa có điểm'}
-                      </span>
-                    </div>
-                    <p className="mt-1.5 text-xs text-[#b4b8c8] tabular-nums">
-                      {ratingStatus ||
-                        (ratingObj && ratingObj.n > 0
-                          ? `Trung bình từ ${ratingObj.n} lượt đánh giá của khán giả.`
-                          : 'Hãy là khán giả đầu tiên chấm điểm cho bộ phim này.')}
-                    </p>
-                  </div>
-
-                  {/* Timestamped Comments Box */}
-                  <div className="rounded-xl border border-[#f4f4f6]/10 bg-[#161822] p-4">
-                    <div className="flex items-center justify-between">
-                      <h3 className="inline-flex items-center gap-1.5 text-sm font-bold text-[#f4f4f6] tabular-nums">
-                        <MessageSquare className="h-4 w-4 text-[#ffd875]" strokeWidth={1.75} />
-                        <span>Bình luận theo mốc giờ ({comments.length})</span>
-                      </h3>
-                    </div>
-
-                    <form onSubmit={handlePostComment} className="mt-3 space-y-2">
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          placeholder="Tên hiển thị..."
-                          value={commentAuthor}
-                          onChange={(e) => setCommentAuthor(e.target.value)}
-                          maxLength={32}
-                          className="w-1/3 rounded-lg border border-[#f4f4f6]/15 bg-[#0d0e14] px-2.5 py-1.5 text-xs text-[#f4f4f6] focus:border-[#ffd875] focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleAttachCurrentTime}
-                          className={`inline-flex flex-1 items-center justify-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium tabular-nums transition-colors ${
-                            attachedTimestamp !== null
-                              ? 'border-[#ffd875] bg-[#ffd875]/20 text-[#ffd875]'
-                              : 'border-[#f4f4f6]/15 bg-[#0d0e14] text-[#c9cddc] hover:text-[#f4f4f6]'
-                          }`}
-                        >
-                          <Clock className="h-3.5 w-3.5" strokeWidth={1.75} />
-                          <span>
-                            {attachedTimestamp !== null
-                              ? `Mốc ${formatClock(attachedTimestamp)} (Bỏ gắn)`
-                              : 'Gắn mốc đang phát'}
-                          </span>
-                        </button>
-                      </div>
-
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          placeholder="Viết cảm nhận hoặc mốc tình tiết hay..."
-                          value={commentText}
-                          onChange={(e) => setCommentText(e.target.value)}
-                          maxLength={300}
-                          className="flex-1 rounded-lg border border-[#f4f4f6]/15 bg-[#0d0e14] px-3 py-1.5 text-xs text-[#f4f4f6] focus:border-[#ffd875] focus:outline-none"
-                        />
-                        <button
-                          type="submit"
-                          className="rounded-lg bg-[#ffd875] px-3.5 py-1.5 text-xs font-bold text-[#0d0e14] transition-colors hover:bg-[#ffe294]"
-                        >
-                          Gửi
-                        </button>
-                      </div>
-                    </form>
-
-                    <div className="mt-3 max-h-60 space-y-2 overflow-y-auto pr-1">
-                      {loadingComments ? (
-                        <p className="text-xs text-[#b4b8c8]">Đang tải bình luận...</p>
-                      ) : comments.length === 0 ? (
-                        <p className="text-xs text-[#b4b8c8]">
-                          Chưa có bình luận nào cho phim này.
-                        </p>
-                      ) : (
-                        comments.map((cmt, idx) => (
-                          <div
-                            key={cmt.id || idx}
-                            className="rounded-lg border border-[#f4f4f6]/10 bg-[#0d0e14] p-2.5 text-xs"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-semibold text-[#f4f4f6]">
-                                {cmt.m?.n || cmt.n || 'Khán giả'}
+                            <FilmThumb id={ep.id} alt="" className="h-12 w-20 shrink-0 rounded-md object-cover" />
+                            <span className="min-w-0 flex-1">
+                              <span className="line-clamp-2 text-xs font-semibold leading-snug">{ep.title}</span>
+                              <span className="mt-0.5 block text-[11px] text-[#c4c8d9] tabular-nums">
+                                {ep.dur || 'HD'}
+                                {isCurrent ? ' · Đang phát' : ''}
                               </span>
-                              <div className="flex items-center gap-1.5">
-                                {typeof cmt.s === 'number' && cmt.s > 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSeekTo(cmt.s!)}
-                                    className="inline-flex items-center gap-1 rounded bg-[#ffd875]/15 px-1.5 py-0.5 text-[11px] font-semibold text-[#ffd875] tabular-nums hover:bg-[#ffd875]/25"
-                                  >
-                                    <Play className="h-2.5 w-2.5" strokeWidth={2} />
-                                    <span>{formatClock(cmt.s)}</span>
-                                  </button>
-                                )}
-                                {cmt.d && (
-                                  <span className="text-[11px] text-[#8f95ab]">{cmt.d}</span>
-                                )}
-                              </div>
-                            </div>
-                            <p className="mt-1 text-[#d5d8e6]">{cmt.t}</p>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Related Films Strip */}
-              {relatedFilms.length > 0 && (
-                <div className="mt-6 border-t border-[#f4f4f6]/10 pt-5">
-                  <h3 className="text-sm font-bold text-[#f4f4f6]">
-                    Phim AI cùng chuyên mục & kênh liên quan
-                  </h3>
-                  <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
-                    {relatedFilms.map((rf) => (
-                      <button
-                        key={rf.id}
-                        type="button"
-                        onClick={() => onSelectFilm(rf)}
-                        className="group flex flex-col overflow-hidden rounded-lg border border-[#f4f4f6]/10 bg-[#161822] text-left transition-all hover:border-[#ffd875]/50"
-                      >
-                        <div className="relative aspect-video w-full overflow-hidden bg-black">
-                          <img
-                            src={getThumbUrl(rf.id)}
-                            onError={(e) => {
-                              const t = e.currentTarget;
-                              if (!t.dataset.fallback) {
-                                t.dataset.fallback = '1';
-                                t.src = getFallbackThumbUrl(rf.id);
-                              }
-                            }}
-                            alt={rf.title}
-                            loading="lazy"
-                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                          />
-                          <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1.5 py-0.5 text-[10px] font-semibold text-[#f4f4f6] tabular-nums">
-                            {rf.dur || 'HD'}
-                          </span>
-                        </div>
-                        <div className="p-2">
-                          <div className="line-clamp-2 text-xs font-semibold text-[#f4f4f6] group-hover:text-[#ffd875]">
-                            {rf.title}
-                          </div>
-                          <div className="mt-1 flex items-center justify-between text-[11px] text-[#b4b8c8] tabular-nums">
-                            <span className="truncate">{rf.channel}</span>
-                            <ChevronRight className="h-3 w-3 shrink-0" strokeWidth={1.75} />
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </section>
               )}
-            </>
-          )}
+            </div>
+          </div>
+
+          {/* Side panel: rating + timestamped comments */}
+          <aside aria-label="Đánh giá và bình luận" className="mt-4 space-y-4 px-4 sm:px-0 lg:mt-0">
+            <section aria-labelledby="kv-rate-title" className="rounded-xl border border-[#f4f4f6]/10 bg-[#161822] p-4">
+              <h3 id="kv-rate-title" className="text-sm font-bold text-[#f4f4f6]">
+                Chấm điểm bộ phim
+              </h3>
+              <div className="mt-2 flex flex-wrap items-center gap-x-1 gap-y-2">
+                <div role="group" aria-label="Chọn số sao" className="flex items-center">
+                  {[1, 2, 3, 4, 5].map((star) => {
+                    const active = (myRating || Math.round(avgStars)) >= star;
+                    return (
+                      <IconButton
+                        key={star}
+                        label={`Chấm ${star} sao`}
+                        variant="ghost"
+                        aria-pressed={myRating === star}
+                        onClick={() => handleRate(star)}
+                        className="kv-touch-square"
+                        icon={
+                          <Star
+                            className={`h-5 w-5 ${active ? 'text-[#ffd875]' : 'text-[#6b7186]'}`}
+                            strokeWidth={1.75}
+                            fill={active ? 'currentColor' : 'none'}
+                            aria-hidden="true"
+                          />
+                        }
+                      />
+                    );
+                  })}
+                </div>
+                <span className="ml-1 text-sm font-semibold text-[#ffd875] tabular-nums">
+                  {avgStars > 0 ? `${avgStars.toFixed(1)} / 5` : 'Chưa có điểm'}
+                </span>
+              </div>
+              <p role="status" className="mt-1.5 text-xs text-[#c4c8d9] tabular-nums">
+                {ratingStatus ||
+                  (ratingObj && ratingObj.n > 0
+                    ? `Trung bình từ ${ratingObj.n.toLocaleString('vi-VN')} lượt đánh giá.`
+                    : 'Hãy là người đầu tiên chấm điểm phim này.')}
+              </p>
+            </section>
+
+            <section aria-labelledby="kv-comments-title" className="rounded-xl border border-[#f4f4f6]/10 bg-[#161822] p-4">
+              <h3
+                id="kv-comments-title"
+                className="inline-flex items-center gap-1.5 text-sm font-bold text-[#f4f4f6] tabular-nums"
+              >
+                <MessageSquare className="h-4 w-4 text-[#ffd875]" strokeWidth={1.75} aria-hidden="true" />
+                Bình luận theo mốc giờ ({comments.length})
+              </h3>
+
+              <form onSubmit={handlePostComment} className="mt-3 space-y-2">
+                <TextInput
+                  label="Tên hiển thị"
+                  isLabelHidden
+                  value={commentAuthor}
+                  onChange={(v) => setCommentAuthor(v.slice(0, 32))}
+                  placeholder="Tên hiển thị"
+                  autoComplete="nickname"
+                  width="100%"
+                />
+                <TextInput
+                  label="Nội dung bình luận"
+                  isLabelHidden
+                  value={commentText}
+                  onChange={(v) => setCommentText(v.slice(0, 300))}
+                  placeholder="Cảm nhận hoặc tình tiết đáng nhớ…"
+                  enterKeyHint="send"
+                  width="100%"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    label={attachedTimestamp !== null ? `Bỏ mốc ${formatClock(attachedTimestamp)}` : 'Gắn mốc giờ'}
+                    tooltip="Gắn thời điểm đang phát vào bình luận"
+                    aria-pressed={attachedTimestamp !== null}
+                    onClick={handleAttachCurrentTime}
+                    icon={<Clock {...ICON} aria-hidden="true" />}
+                    width="100%"
+                    className="kv-touch tabular-nums"
+                  />
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    label="Gửi bình luận"
+                    icon={<Send {...ICON} aria-hidden="true" />}
+                    isDisabled={commentText.trim().length < 2}
+                    width="100%"
+                    className="kv-touch"
+                  />
+                </div>
+              </form>
+
+              <ul className="kv-scroll mt-3 max-h-72 space-y-2 pr-1 lg:max-h-[420px]" aria-live="polite">
+                {loadingComments ? (
+                  <li className="text-xs text-[#c4c8d9]">Đang tải bình luận…</li>
+                ) : comments.length === 0 ? (
+                  <li className="text-xs text-[#c4c8d9]">Chưa có bình luận nào. Viết cảm nhận đầu tiên ở trên.</li>
+                ) : (
+                  comments.map((cmt, idx) => (
+                    <li
+                      key={cmt.id || idx}
+                      className="rounded-lg border border-[#f4f4f6]/10 bg-[#0d0e14] p-2.5 text-xs"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-[#f4f4f6]">{cmt.m?.n || cmt.n || 'Khán giả'}</span>
+                        <span className="flex items-center gap-1.5">
+                          {typeof cmt.s === 'number' && cmt.s > 0 && (
+                            <Button
+                              label={`Tua tới ${formatClock(cmt.s)}`}
+                              size="sm"
+                              variant="ghost"
+                              icon={<Play className="h-3 w-3" strokeWidth={2} aria-hidden="true" />}
+                              onClick={() => handleSeekTo(cmt.s!)}
+                              className="kv-touch text-[#ffd875] tabular-nums"
+                            >
+                              {formatClock(cmt.s)}
+                            </Button>
+                          )}
+                          {cmt.d && <span className="text-[11px] text-[#9da3b8] tabular-nums">{cmt.d}</span>}
+                        </span>
+                      </div>
+                      <p className="mt-1 break-words text-[#d5d8e6]">{cmt.t}</p>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </section>
+          </aside>
         </div>
+
+        {/* Related films */}
+        {relatedFilms.length > 0 && (
+          <section aria-labelledby="kv-related-title" className="mt-6 border-t border-[#f4f4f6]/10 px-4 pt-5 sm:px-5 lg:px-6">
+            <h3 id="kv-related-title" className="text-sm font-bold text-[#f4f4f6]">
+              Cùng chuyên mục và kênh
+            </h3>
+            <ul className="kv-scroll-x -mx-4 mt-3 flex gap-3 px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-3 sm:px-0 lg:grid-cols-6">
+              {relatedFilms.map((rf) => (
+                <li key={rf.id} className="w-[44%] shrink-0 sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => onSelectFilm(rf)}
+                    className="kv-lift kv-thumb-zoom group flex h-full w-full flex-col overflow-hidden rounded-xl border border-[#f4f4f6]/10 bg-[#161822] text-left hover:border-[#ffd875]/50"
+                  >
+                    <span className="relative block aspect-video w-full overflow-hidden bg-black">
+                      <FilmThumb id={rf.id} alt="" className="h-full w-full object-cover" />
+                      <span className="absolute bottom-1 right-1 rounded-md bg-black/80 px-1.5 py-0.5 text-[10px] font-semibold text-[#f4f4f6] tabular-nums">
+                        {rf.dur || 'HD'}
+                      </span>
+                    </span>
+                    <span className="block p-2">
+                      <span className="line-clamp-2 text-xs font-semibold text-[#f4f4f6] group-hover:text-[#ffd875]">
+                        {rf.title}
+                      </span>
+                      <span className="mt-1 flex items-center justify-between gap-1 text-[11px] text-[#c4c8d9]">
+                        <span className="truncate">{rf.channel}</span>
+                        <ChevronRight className="h-3 w-3 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
       </div>
     </div>
   );

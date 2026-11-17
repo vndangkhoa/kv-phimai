@@ -1,19 +1,23 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  X,
-  ChevronUp,
-  ChevronDown,
-  Volume2,
-  VolumeX,
   Bookmark,
   BookmarkCheck,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
-  Maximize2,
-  Sparkles,
-  Play,
-  Pause,
   Layers,
+  Maximize2,
+  Pause,
+  Play,
+  Sparkles,
+  Volume2,
+  VolumeX,
+  X,
 } from 'lucide-react';
+import { Dialog } from '@astryxdesign/core/Dialog';
+import { Button } from '@astryxdesign/core/Button';
+import { IconButton } from '@astryxdesign/core/IconButton';
+import { Badge } from '@astryxdesign/core/Badge';
 import type { Film } from '../types/phimai';
 import {
   CAT_LABEL,
@@ -24,6 +28,8 @@ import {
   getThumbUrl,
   isAgeVerified,
 } from '../utils/phimaiUtils';
+import { PHONE_QUERY, useMediaQuery } from './useMediaQuery';
+import './overlays.css';
 
 export interface SwipeFeedModalProps {
   isOpen: boolean;
@@ -35,6 +41,13 @@ export interface SwipeFeedModalProps {
   onClose: () => void;
 }
 
+const ICON = { className: 'h-4 w-4 shrink-0', strokeWidth: 1.75 } as const;
+const ICON_LG = { className: 'h-5 w-5 shrink-0', strokeWidth: 1.75 } as const;
+
+/**
+ * Vertical reels feed. Always a full-screen Astryx Dialog (native modal, focus
+ * trap, Escape to close). Swipe up/down, Arrow keys or J/K change film; M mutes.
+ */
 export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
   isOpen,
   startFilm,
@@ -44,6 +57,7 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
   onOpenFullPlayer,
   onClose,
 }) => {
+  const isPhone = useMediaQuery(PHONE_QUERY);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const touchStartY = useRef<number | null>(null);
 
@@ -54,16 +68,14 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
   const [progress, setProgress] = useState<number>(0);
   const [useEmbed, setUseEmbed] = useState<boolean>(false);
 
-  // Build feed queue when modal opens
+  // Build the feed queue when the overlay opens
   useEffect(() => {
     if (!isOpen) return;
     const eligible = films.filter((f) => !f.adult || isAgeVerified());
     if (eligible.length === 0) return;
-
     const shuffled = [...eligible].sort(() => Math.random() - 0.5);
     if (startFilm) {
-      const withoutStart = shuffled.filter((f) => f.id !== startFilm.id);
-      setFeedQueue([startFilm, ...withoutStart]);
+      setFeedQueue([startFilm, ...shuffled.filter((f) => f.id !== startFilm.id)]);
     } else {
       setFeedQueue(shuffled);
     }
@@ -89,28 +101,27 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
     setPaused(false);
   }, [feedQueue.length]);
 
-  // Keyboard navigation
+  // Keyboard navigation (Escape is owned by the Dialog)
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
       if (e.key === 'ArrowDown' || e.key === 'j') {
         e.preventDefault();
         goNext();
       } else if (e.key === 'ArrowUp' || e.key === 'k') {
         e.preventDefault();
         goPrev();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
       } else if (e.key === 'm') {
         setMuted((v) => !v);
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [isOpen, goNext, goPrev, onClose]);
+  }, [isOpen, goNext, goPrev]);
 
-  // Record view and start playback when currentFilm changes
+  // Record view and start playback when the current film changes
   useEffect(() => {
     if (!isOpen || !currentFilm) return;
     fetch('/api/view', {
@@ -123,7 +134,7 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
     if (v && !useEmbed) {
       v.currentTime = 0;
       v.play().catch(() => {
-        // Auto-mute if browser blocks unmuted autoplay
+        // Browser blocked unmuted autoplay: retry muted
         setMuted(true);
         v.muted = true;
         v.play().catch(() => {});
@@ -131,12 +142,7 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
     }
   }, [isOpen, currentFilm, useEmbed]);
 
-  if (!isOpen || !currentFilm) return null;
-
-  const isSaved = savedIds.has(currentFilm.id);
-  const streamUrl = getKVTubeStreamUrl(currentFilm.id);
-  const embedUrl = getKVTubeEmbedUrl(currentFilm.id);
-  const watchUrl = getKVTubeWatchUrl(currentFilm.id);
+  const open = isOpen && currentFilm !== null;
 
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartY.current = e.touches[0].clientY;
@@ -164,234 +170,254 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
     }
   };
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#06070b]/95 backdrop-blur-xl"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Lướt dọc phim AI"
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
-    >
-      {/* Top Floating Header */}
-      <div className="absolute left-0 right-0 top-0 z-20 flex items-center justify-between px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-2.5">
-          <span className="rounded-md bg-[#ffd875] px-2.5 py-1 text-xs font-bold text-[#0d0e14] tabular-nums">
-            Lướt dọc KV-Tube #{currentIndex + 1}/{feedQueue.length}
-          </span>
-          <span className="hidden text-xs text-[#c9cddc] sm:inline-block">
-            Phím mũi tên Lên/Xuống hoặc vuốt dọc để đổi phim
-          </span>
-        </div>
+  const renderBody = (film: Film) => {
+    const isSaved = savedIds.has(film.id);
+    const pct = Math.round(Math.min(100, Math.max(0, progress)));
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setUseEmbed((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[#f4f4f6]/20 bg-black/60 px-3 py-1.5 text-xs font-medium text-[#f4f4f6] hover:bg-black/80"
-          >
-            <Layers className="h-3.5 w-3.5 text-[#ffd875]" strokeWidth={1.75} />
-            <span>{useEmbed ? 'HTML5 Direct' : 'KV-Tube Embed'}</span>
-          </button>
+    const saveToggle = (
+      <Button
+        label={isSaved ? 'Đã lưu' : 'Lưu'}
+        variant={isSaved ? 'primary' : 'secondary'}
+        aria-pressed={isSaved}
+        onClick={() => onToggleSave(film.id)}
+        icon={isSaved ? <BookmarkCheck {...ICON} aria-hidden="true" /> : <Bookmark {...ICON} aria-hidden="true" />}
+        width={isPhone ? '100%' : undefined}
+        className="kv-touch"
+      />
+    );
+    const openFull = (
+      <Button
+        label="Mở rạp"
+        variant="primary"
+        icon={<Maximize2 {...ICON} aria-hidden="true" />}
+        onClick={() => {
+          onClose();
+          onOpenFullPlayer(film);
+        }}
+        width={isPhone ? '100%' : undefined}
+        className="kv-touch"
+      />
+    );
+    const kvtubeLink = (
+      <Button
+        label="KV-Tube"
+        icon={<ExternalLink {...ICON} aria-hidden="true" />}
+        href={getKVTubeWatchUrl(film.id)}
+        target="_blank"
+        rel="noopener noreferrer"
+        width={isPhone ? '100%' : undefined}
+        className="kv-touch"
+      />
+    );
+    const playBtn = (
+      <IconButton
+        label={paused ? 'Phát' : 'Tạm dừng'}
+        icon={paused ? <Play {...ICON_LG} aria-hidden="true" /> : <Pause {...ICON_LG} aria-hidden="true" />}
+        onClick={togglePlayPause}
+        isDisabled={useEmbed}
+        className="kv-touch-square"
+      />
+    );
+    const muteBtn = (
+      <IconButton
+        label={muted ? 'Bật tiếng' : 'Tắt tiếng'}
+        icon={muted ? <VolumeX {...ICON_LG} aria-hidden="true" /> : <Volume2 {...ICON_LG} aria-hidden="true" />}
+        onClick={() => setMuted((v) => !v)}
+        isDisabled={useEmbed}
+        className="kv-touch-square"
+      />
+    );
+    const prevBtn = (
+      <IconButton
+        label="Phim trước"
+        icon={<ChevronUp {...ICON_LG} aria-hidden="true" />}
+        onClick={goPrev}
+        className="kv-touch-square"
+      />
+    );
+    const nextBtn = (
+      <IconButton
+        label="Phim tiếp theo"
+        icon={<ChevronDown {...ICON_LG} aria-hidden="true" />}
+        onClick={goNext}
+        className="kv-touch-square"
+      />
+    );
 
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Đóng chế độ lướt dọc"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#f4f4f6]/20 bg-black/60 text-[#f4f4f6] hover:bg-black/80"
-          >
-            <X className="h-4 w-4" strokeWidth={1.75} />
-          </button>
-        </div>
-      </div>
-
-      {/* Center Vertical Stage */}
-      <div className="relative flex h-full w-full max-w-5xl items-center justify-center px-2 py-14 sm:px-12">
-        <div className="relative flex h-full w-full flex-col justify-between overflow-hidden rounded-2xl border border-[#f4f4f6]/15 bg-black shadow-[0_24px_64px_rgba(0,0,0,0.9)]">
-          {/* Video Element */}
-          <div className="relative flex-1 bg-black" onClick={togglePlayPause}>
-            {useEmbed ? (
-              <iframe
-                src={embedUrl}
-                title={currentFilm.title}
-                className="h-full w-full border-0"
-                allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-              />
-            ) : (
-              <video
-                ref={videoRef}
-                src={streamUrl}
-                poster={getThumbUrl(currentFilm.id)}
-                muted={muted}
-                playsInline
-                autoPlay
-                onTimeUpdate={(e) => {
-                  const v = e.currentTarget;
-                  if (v.duration > 0) {
-                    setProgress((v.currentTime / v.duration) * 100);
-                  }
-                }}
-                onEnded={goNext}
-                className="h-full w-full object-contain"
-              />
-            )}
-
-            {paused && !useEmbed && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/35">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#ffd875]/90 text-[#0d0e14]">
-                  <Play className="h-7 w-7 translate-x-0.5" strokeWidth={2} />
-                </div>
-              </div>
-            )}
+    return (
+      <div className="kv-frame bg-[#06070b]">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-2 px-3 py-2 sm:px-6 sm:py-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <h2 id="kv-swipe-title" className="sr-only">
+              Lướt dọc phim AI
+            </h2>
+            <Badge variant="yellow" label={`${currentIndex + 1}/${feedQueue.length}`} />
+            <span className="hidden text-xs text-[#c4c8d9] md:inline">
+              Vuốt dọc, phím mũi tên hoặc J/K để đổi phim · M để tắt tiếng
+            </span>
           </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              label={useEmbed ? 'Đang nhúng KV-Tube' : 'Nhúng KV-Tube'}
+              tooltip="Chuyển giữa luồng trực tiếp và trình phát nhúng KV-Tube"
+              aria-pressed={useEmbed}
+              onClick={() => setUseEmbed((v) => !v)}
+              icon={<Layers {...ICON} aria-hidden="true" />}
+              className="kv-touch"
+            />
+            <IconButton
+              label="Đóng chế độ lướt dọc"
+              icon={<X {...ICON_LG} aria-hidden="true" />}
+              onClick={onClose}
+              className="kv-touch-square"
+            />
+          </div>
+        </div>
 
-          {/* Bottom Overlay Info & Progress Bar */}
-          <div className="relative z-10 border-t border-[#f4f4f6]/10 bg-[#0d0e14]/95 p-4 sm:p-5">
-            <div className="mb-3 h-1 w-full overflow-hidden rounded-full bg-[#f4f4f6]/15">
-              <div
-                className="h-full bg-[#ffd875] transition-all duration-200"
-                style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-              />
-            </div>
-
-            <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2 text-xs tabular-nums">
-                  <span className="rounded bg-[#ffd875] px-2 py-0.5 font-bold text-[#0d0e14]">
-                    #{currentFilm.rank}
-                  </span>
-                  <span className="font-semibold text-[#ffd875]">{currentFilm.channel}</span>
-                  <span className="text-[#b4b8c8]">• {formatViewsVN(currentFilm.views)}</span>
-                  {currentFilm.dur && (
-                    <span className="rounded bg-[#f4f4f6]/10 px-2 py-0.5 text-[#f4f4f6]">
-                      {currentFilm.dur}
-                    </span>
-                  )}
-                  <span className="inline-flex items-center gap-1 rounded bg-[#f4f4f6]/10 px-2 py-0.5 text-[#c9cddc]">
-                    <Sparkles className="h-3 w-3 text-[#ffd875]" strokeWidth={1.75} />
-                    <span>{currentFilm.tool || 'AI'}</span>
-                  </span>
-                </div>
-
-                <h3 className="line-clamp-2 text-base font-bold text-[#f4f4f6] sm:text-lg">
-                  {currentFilm.title}
-                </h3>
-
-                <p className="line-clamp-2 text-xs text-[#c9cddc]">
-                  {currentFilm.blurb}
-                </p>
-
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  <span className="rounded bg-[#ffd875]/15 px-2 py-0.5 text-[11px] font-medium text-[#ffd875]">
-                    {CAT_LABEL[currentFilm.cat] || currentFilm.cat}
-                  </span>
-                  {(currentFilm.tags || []).slice(0, 3).map((t) => (
-                    <span
-                      key={t}
-                      className="rounded border border-[#f4f4f6]/15 px-2 py-0.5 text-[11px] text-[#b4b8c8]"
-                    >
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {/* Action Buttons Dock */}
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
-                {!useEmbed && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={togglePlayPause}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#f4f4f6]/15 bg-[#161822] px-3 py-2 text-xs font-semibold text-[#f4f4f6] hover:bg-[#f4f4f6]/10"
-                    >
-                      {paused ? (
-                        <Play className="h-4 w-4 text-[#ffd875]" strokeWidth={1.75} />
-                      ) : (
-                        <Pause className="h-4 w-4 text-[#ffd875]" strokeWidth={1.75} />
-                      )}
-                      <span>{paused ? 'Phát' : 'Tạm dừng'}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setMuted((v) => !v)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#f4f4f6]/15 bg-[#161822] px-3 py-2 text-xs font-semibold text-[#f4f4f6] hover:bg-[#f4f4f6]/10"
-                    >
-                      {muted ? (
-                        <VolumeX className="h-4 w-4 text-[#ff6b6b]" strokeWidth={1.75} />
-                      ) : (
-                        <Volume2 className="h-4 w-4 text-[#10b981]" strokeWidth={1.75} />
-                      )}
-                      <span>{muted ? 'Bật tiếng' : 'Có tiếng'}</span>
-                    </button>
-                  </>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => onToggleSave(currentFilm.id)}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
-                    isSaved
-                      ? 'bg-[#ffd875] text-[#0d0e14]'
-                      : 'border border-[#f4f4f6]/15 bg-[#161822] text-[#f4f4f6] hover:bg-[#f4f4f6]/10'
-                  }`}
-                >
-                  {isSaved ? (
-                    <BookmarkCheck className="h-4 w-4" strokeWidth={1.75} />
-                  ) : (
-                    <Bookmark className="h-4 w-4" strokeWidth={1.75} />
-                  )}
-                  <span>{isSaved ? 'Đã lưu' : 'Lưu'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    onClose();
-                    onOpenFullPlayer(currentFilm);
+        {/* Stage */}
+        <div
+          className="flex min-h-0 flex-1 items-stretch justify-center gap-3 sm:px-6 sm:pb-6"
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+        >
+          <div className="relative flex min-h-0 w-full max-w-5xl flex-col overflow-hidden bg-black sm:rounded-2xl sm:border sm:border-[#f4f4f6]/15 sm:shadow-[0_24px_64px_-16px_rgba(0,0,0,0.85)]">
+            <div className="relative min-h-0 flex-1 bg-black" onClick={togglePlayPause}>
+              {useEmbed ? (
+                <iframe
+                  src={getKVTubeEmbedUrl(film.id)}
+                  title={`KV-Tube: ${film.title}`}
+                  className="h-full w-full border-0"
+                  allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                />
+              ) : (
+                <video
+                  ref={videoRef}
+                  src={getKVTubeStreamUrl(film.id)}
+                  poster={getThumbUrl(film.id)}
+                  muted={muted}
+                  playsInline
+                  autoPlay
+                  aria-label={`Đang phát: ${film.title}`}
+                  onTimeUpdate={(e) => {
+                    const v = e.currentTarget;
+                    if (v.duration > 0) setProgress((v.currentTime / v.duration) * 100);
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#ffd875] px-3.5 py-2 text-xs font-bold text-[#0d0e14] hover:bg-[#ffe294]"
-                >
-                  <Maximize2 className="h-4 w-4" strokeWidth={1.75} />
-                  <span>Mở rạp đầy đủ</span>
-                </button>
+                  onEnded={goNext}
+                  className="h-full w-full object-contain"
+                />
+              )}
+              {paused && !useEmbed && (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/35">
+                  <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#ffd875] text-[#0d0e14]">
+                    <Play className="h-7 w-7 translate-x-0.5" strokeWidth={2} aria-hidden="true" />
+                  </span>
+                </div>
+              )}
+            </div>
 
-                <a
-                  href={watchUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 rounded-lg border border-[#f4f4f6]/15 bg-[#161822] px-3 py-2 text-xs font-medium text-[#c9cddc] hover:text-[#ffd875]"
-                >
-                  <span>KV-Tube</span>
-                  <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
-                </a>
+            {/* Info + actions */}
+            <div className="kv-bottom-bar relative z-10 border-t border-[#f4f4f6]/10 bg-[#0d0e14] px-4 pt-3 sm:p-5">
+              <div
+                role="progressbar"
+                aria-label="Tiến độ phát"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={pct}
+                className="mb-3 h-1 w-full overflow-hidden rounded-full bg-[#f4f4f6]/15"
+              >
+                <div className="h-full bg-[#ffd875]" style={{ width: `${pct}%` }} />
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <h3 className="line-clamp-2 text-base font-bold leading-snug text-[#f4f4f6] sm:text-lg">
+                    {film.title}
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs tabular-nums">
+                    <Badge variant="yellow" label={`#${film.rank}`} />
+                    <span className="font-semibold text-[#ffd875]">{film.channel}</span>
+                    <span className="text-[#c4c8d9]">{formatViewsVN(film.views)}</span>
+                    {film.dur && (
+                      <span className="rounded-md bg-[#f4f4f6]/10 px-2 py-0.5 text-[#f4f4f6]">{film.dur}</span>
+                    )}
+                    <span className="inline-flex items-center gap-1 rounded-md bg-[#f4f4f6]/10 px-2 py-0.5 text-[#c4c8d9]">
+                      <Sparkles className="h-3 w-3 text-[#ffd875]" strokeWidth={1.75} aria-hidden="true" />
+                      {film.tool || 'AI'}
+                    </span>
+                  </div>
+                  <p className="line-clamp-2 max-w-[70ch] text-xs text-[#c4c8d9]">{film.blurb}</p>
+                  <div className="hidden flex-wrap gap-1.5 pt-1 sm:flex">
+                    <span className="rounded-md bg-[#ffd875]/15 px-2 py-0.5 text-[11px] font-medium text-[#ffd875]">
+                      {CAT_LABEL[film.cat] || film.cat}
+                    </span>
+                    {(film.tags || []).slice(0, 3).map((t) => (
+                      <span key={t} className="rounded-md border border-[#f4f4f6]/15 px-2 py-0.5 text-[11px] text-[#c4c8d9]">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {isPhone ? (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-5 gap-2" role="group" aria-label="Điều khiển phát">
+                      {prevBtn}
+                      {playBtn}
+                      {muteBtn}
+                      {nextBtn}
+                      <IconButton
+                        label="Xem trên KV-Tube"
+                        icon={<ExternalLink {...ICON_LG} aria-hidden="true" />}
+                        href={getKVTubeWatchUrl(film.id)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="kv-touch-square"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2" role="group" aria-label="Thao tác với phim">
+                      {saveToggle}
+                      {openFull}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex shrink-0 flex-wrap items-center gap-2" role="group" aria-label="Thao tác với phim">
+                    {playBtn}
+                    {muteBtn}
+                    {saveToggle}
+                    {openFull}
+                    {kvtubeLink}
+                  </div>
+                )}
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Right Side Vertical Prev/Next Arrows */}
-        <div className="ml-3 hidden flex-col gap-3 sm:flex">
-          <button
-            type="button"
-            onClick={goPrev}
-            aria-label="Phim trước"
-            className="flex h-12 w-12 items-center justify-center rounded-full border border-[#f4f4f6]/20 bg-[#161822] text-[#f4f4f6] transition-colors hover:border-[#ffd875] hover:text-[#ffd875]"
-          >
-            <ChevronUp className="h-6 w-6" strokeWidth={1.75} />
-          </button>
-          <button
-            type="button"
-            onClick={goNext}
-            aria-label="Phim tiếp theo"
-            className="flex h-12 w-12 items-center justify-center rounded-full border border-[#f4f4f6]/20 bg-[#161822] text-[#f4f4f6] transition-colors hover:border-[#ffd875] hover:text-[#ffd875]"
-          >
-            <ChevronDown className="h-6 w-6" strokeWidth={1.75} />
-          </button>
+          {!isPhone && (
+            <div className="hidden flex-col justify-center gap-3 sm:flex" role="group" aria-label="Chuyển phim">
+              {prevBtn}
+              {nextBtn}
+            </div>
+          )}
         </div>
       </div>
-    </div>
+    );
+  };
+
+  return (
+    <Dialog
+      isOpen={open}
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+      variant="fullscreen"
+      padding={0}
+      aria-labelledby="kv-swipe-title"
+      className="kv-overlay"
+      data-testid="swipe-feed-modal"
+    >
+      {open && currentFilm ? renderBody(currentFilm) : null}
+    </Dialog>
   );
 };
