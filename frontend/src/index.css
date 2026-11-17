@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --phimai-accent: #ffd875;
+    --phimai-surface: #0d0e14;
+    --phimai-elevated: #161822;
+    --phimai-text: #f4f4f6;
+    --phimai-muted: #b4b8c8;
+    --phimai-border: rgba(244, 244, 246, 0.12);
+    color-scheme: dark;
+  }
+
+  html {
+    font-family: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
+    caret-color: var(--phimai-accent);
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 216, 117, 0.32) rgba(13, 14, 20, 0.9);
+  }
+
+  ::selection {
+    background-color: rgba(255, 216, 117, 0.26);
+    color: #ffd875;
+  }
+
+  a {
+    text-underline-offset: 0.22em;
+  }
+
+  :focus-visible {
+    outline: 2px solid #ffd875;
+    outline-offset: 2px;
+  }
+
+  h1, h2, h3, h4 {
+    text-wrap: balance;
+    letter-spacing: -0.02em;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(13, 14, 20, 0.85);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 216, 117, 0.28);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 216, 117, 0.48);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

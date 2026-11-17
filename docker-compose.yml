@@ -1,0 +1,25 @@
+services:
+  kv-phimai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vndangkhoa/kv-phimai:latest
+    container_name: kv-phimai
+    platform: linux/amd64
+    ports:
+      - "8090:8090"
+    environment:
+      - PORT=8090
+      - DATA_DIR=/app/data
+      - DATABASE_URL=/app/data/phimai.db
+      - KVTUBE_URL=https://u.khoavo.vndns.net
+      - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      - ./backend/data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8090/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

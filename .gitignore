@@ -1,0 +1,19 @@
+# Dependencies & build outputs
+frontend/node_modules/
+frontend/dist/
+backend/server
+*.spk
+
+# Runtime SQLite databases (keep backend/data/*.json catalog seeds tracked!)
+backend/*.db
+backend/*.db-*
+backend/*.sqlite*
+backend/data/*.db
+backend/data/*.db-*
+backend/data/*.sqlite*
+!backend/data/*.json
+
+# Visual review screenshots & temp files
+.impeccable/review/*.png
+.DS_Store
+*.log

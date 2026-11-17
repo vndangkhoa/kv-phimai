@@ -1,0 +1,138 @@
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Big+Shoulders+Display:wght@700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  --ease-expo-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --font-sans: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --font-cinema-display: 'Big Shoulders Display', 'Be Vietnam Pro', sans-serif;
+}
+
+/* Global tabular numerals & browser surface craft */
+.tabular-nums,
+[data-tabular="true"],
+table td,
+table th,
+time,
+.rank-numeral,
+.metric-value,
+.duration-pill {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+a {
+  text-underline-offset: 0.22em;
+  text-decoration-thickness: 1px;
+}
+
+h1, h2, h3, h4 {
+  text-wrap: balance;
+}
+
+p.prose-measure {
+  max-width: 68ch;
+}
+
+/* ============================================================================
+   KV-Cinema Sovereign / Noir IMAX Screening Room
+   ============================================================================ */
+.world-noir {
+  --noir-bg: #0d0e14;
+  --noir-surface: #161822;
+  --noir-surface-raised: #1e2130;
+  --noir-border: rgba(244, 244, 246, 0.11);
+  --noir-border-strong: rgba(255, 216, 117, 0.36);
+  --noir-text: #f4f4f6;
+  --noir-text-secondary: #c4c8d9;
+  --noir-text-muted: #989fb8;
+  --noir-gold: #ffd875;
+  --noir-gold-deep: #e6b949;
+  --noir-crimson: #e50914;
+  --noir-crimson-soft: #ff6b72;
+  --noir-shadow-card: 0 14px 34px -10px rgba(4, 5, 10, 0.72);
+  --noir-shadow-stage: 0 24px 64px -16px rgba(0, 0, 0, 0.85);
+
+  background-color: var(--noir-bg);
+  color: var(--noir-text);
+  font-family: var(--font-sans);
+  caret-color: var(--noir-gold);
+  scrollbar-width: thin;
+  scrollbar-color: #2d3248 #0d0e14;
+}
+
+.world-noir ::selection {
+  background-color: rgba(255, 216, 117, 0.28);
+  color: #ffffff;
+}
+
+.world-noir :focus-visible {
+  outline: 2px solid var(--noir-gold);
+  outline-offset: 2px;
+}
+
+.world-noir ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.world-noir ::-webkit-scrollbar-track {
+  background: #0d0e14;
+}
+
+.world-noir ::-webkit-scrollbar-thumb {
+  background: #2b3044;
+  border-radius: 9999px;
+  border: 2px solid #0d0e14;
+}
+
+.world-noir ::-webkit-scrollbar-thumb:hover {
+  background: var(--noir-gold);
+}
+
+.noir-display-title {
+  font-family: var(--font-cinema-display);
+  letter-spacing: 0.01em;
+  line-height: 1.04;
+}
+
+.noir-hero-stage {
+  position: relative;
+  background-color: #11131c;
+  border: 1px solid var(--noir-border);
+  box-shadow: var(--noir-shadow-stage);
+  overflow: hidden;
+}
+
+.noir-hero-backdrop {
+  transition: transform 900ms var(--ease-expo-out), filter 600ms var(--ease-expo-out);
+}
+
+.noir-hero-stage:hover .noir-hero-backdrop {
+  transform: scale(1.025);
+}
+
+.noir-card {
+  background-color: var(--noir-surface);
+  border: 1px solid var(--noir-border);
+  box-shadow: var(--noir-shadow-card);
+  transition: transform 320ms var(--ease-expo-out), border-color 240ms var(--ease-expo-out), box-shadow 320ms var(--ease-expo-out);
+}
+
+.noir-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--noir-border-strong);
+  box-shadow: 0 20px 42px -12px rgba(0, 0, 0, 0.88);
+}
+
+.noir-reel-strip {
+  display: flex;
+  gap: 1.125rem;
+  overflow-x: auto;
+  padding-bottom: 0.75rem;
+  scroll-snap-type: x mandatory;
+}
+
+.noir-reel-item {
+  scroll-snap-align: start;
+  flex-shrink: 0;
+}

@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-17T08:46:00Z",
+  "title": "Design System: KV-PhimAI — KV-Cinema Sovereign (Noir IMAX Screening Room)",
+  "extensions": {
+    "colorMeta": {
+      "obsidian-void": {
+        "role": "neutral",
+        "displayName": "Obsidian Projection Void",
+        "canonical": "#0d0e14",
+        "tonalRamp": ["#07080c", "#0d0e14", "#161822", "#232736", "#393f56", "#5e6685", "#989fb8", "#e4e7f2"]
+      },
+      "slate-screening": {
+        "role": "neutral",
+        "displayName": "Elevated Screening Slate",
+        "canonical": "#161822",
+        "tonalRamp": ["#0d0e14", "#161822", "#1e2130", "#2c3146", "#434a68", "#697296", "#9da5c4", "#e8ebf5"]
+      },
+      "slate-raised": {
+        "role": "neutral",
+        "displayName": "Raised Slate Module",
+        "canonical": "#1e2130",
+        "tonalRamp": ["#0d0e14", "#161822", "#1e2130", "#2d3248", "#454c6b", "#6b7499", "#9fa7c7", "#ebedf7"]
+      },
+      "tungsten-gold": {
+        "role": "primary",
+        "displayName": "Tungsten Projection Gold",
+        "canonical": "#ffd875",
+        "tonalRamp": ["#3b2c06", "#664d0c", "#947014", "#c49621", "#e6b949", "#ffd875", "#ffe59e", "#fff4d6"]
+      },
+      "tungsten-amber": {
+        "role": "secondary",
+        "displayName": "Tungsten Warm Amber",
+        "canonical": "#e6b949",
+        "tonalRamp": ["#332404", "#5c4209", "#876110", "#b58319", "#e6b949", "#ffd875", "#ffe7a3", "#fff6db"]
+      },
+      "cinema-crimson": {
+        "role": "primary",
+        "displayName": "Cinema Crimson",
+        "canonical": "#e50914",
+        "tonalRamp": ["#380205", "#630409", "#94060d", "#c20811", "#e50914", "#ff4750", "#ff858b", "#ffd6d8"]
+      },
+      "crimson-soft": {
+        "role": "tertiary",
+        "displayName": "Soft Crimson",
+        "canonical": "#ff6b72",
+        "tonalRamp": ["#380205", "#630409", "#94060d", "#c20811", "#e50914", "#ff6b72", "#ffa3a8", "#ffe0e2"]
+      },
+      "signal-emerald": {
+        "role": "secondary",
+        "displayName": "Live Signal Emerald",
+        "canonical": "#10b981",
+        "tonalRamp": ["#052e20", "#064e36", "#047852", "#059666", "#10b981", "#34d399", "#6ee7b7", "#d1fae5"]
+      },
+      "ivory-crisp": {
+        "role": "neutral",
+        "displayName": "Crisp Ivory",
+        "canonical": "#f4f4f6",
+        "tonalRamp": ["#18191f", "#2e303b", "#4b4e5e", "#6e7387", "#989fb8", "#c4c8d9", "#e2e4ed", "#f4f4f6"]
+      },
+      "slate-secondary": {
+        "role": "neutral",
+        "displayName": "Tinted Silver-Slate",
+        "canonical": "#c4c8d9",
+        "tonalRamp": ["#141620", "#26293a", "#3f445e", "#5d6485", "#8189ab", "#a5acc9", "#c4c8d9", "#eef0f7"]
+      },
+      "slate-muted": {
+        "role": "neutral",
+        "displayName": "Muted Slate-Indigo",
+        "canonical": "#989fb8",
+        "tonalRamp": ["#141620", "#26293a", "#3f445e", "#5d6485", "#7a82a3", "#989fb8", "#c4c8d9", "#eef0f7"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display (IMAX Hero & Rank Numerals)",
+        "purpose": "Widescreen hero film titles and oversized Top 10 rank numerals."
+      },
+      "headline": {
+        "displayName": "Cinema Section Headline",
+        "purpose": "Section headers for Top 10 Weekly, Marathon Full-Length, Filter Deck, and Sidebar."
+      },
+      "title": {
+        "displayName": "Film Card Title",
+        "purpose": "16:9 film card titles and modal headers."
+      },
+      "body": {
+        "displayName": "Body Copy",
+        "purpose": "Vietnamese film synopses and community wall discussions."
+      },
+      "label": {
+        "displayName": "Tabular Telemetry Label",
+        "purpose": "Ranks (#9450), AI model badges (Veo/Sora/Seedance/Kling/Runway), and durations."
+      }
+    },
+    "shadows": [
+      {
+        "name": "noir-card",
+        "value": "0 14px 34px -10px rgba(4, 5, 10, 0.72)",
+        "purpose": "Ambient depth under 16:9 film cards in KV-Cinema Sovereign."
+      },
+      {
+        "name": "noir-stage",
+        "value": "0 24px 64px -16px rgba(0, 0, 0, 0.85)",
+        "purpose": "Deep theatrical elevation for the widescreen IMAX hero stage."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-expo-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Primary exponential ease-out curve for card elevation, hero backdrop scale, and filter transitions."
+      }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "xl", "value": "1280px" },
+      { "name": "2xl", "value": "1536px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Noir IMAX Primary Play Button",
+      "kind": "button",
+      "refersTo": "button-primary-noir",
+      "description": "Primary widescreen screening button for KV-Cinema Sovereign.",
+      "html": "<button class=\"ds-btn-noir-play\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"currentColor\"><path d=\"M8 5.14v14l11-7-11-7Z\"/></svg><span>Chiếu Ngay (IMAX Player)</span></button>",
+      "css": ".ds-btn-noir-play { display: inline-flex; align-items: center; gap: 10px; background: #e50914; color: #f4f4f6; font-family: 'Be Vietnam Pro', sans-serif; font-size: 14px; font-weight: 700; padding: 12px 24px; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; cursor: pointer; transition: transform 0.24s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s; } .ds-btn-noir-play:hover { background: #f6121d; transform: translateY(-1px); } .ds-btn-noir-play:focus-visible { outline: 2px solid #ffd875; outline-offset: 2px; }"
+    },
+    {
+      "name": "AI Toolchain & Rank Telemetry Chip",
+      "kind": "chip",
+      "refersTo": "button-accent-gold",
+      "description": "Tabular-numeral badge identifying generative video model (Veo, Sora, Seedance, Kling, Runway) and catalog rank.",
+      "html": "<span class=\"ds-chip-model\">Veo · #9450 · 4 giờ 15 phút FULL</span>",
+      "css": ".ds-chip-model { display: inline-flex; align-items: center; background: #ffd875; color: #0d0e14; font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; padding: 4px 10px; border-radius: 6px; }"
+    },
+    {
+      "name": "Noir Screening Film Card",
+      "kind": "card",
+      "refersTo": "card-noir-film",
+      "description": "16:9 film card with AI model badge, tabular runtime pill, and sovereign KV-Tube stream link.",
+      "html": "<article class=\"ds-card-noir\"><div class=\"ds-card-noir-body\"><h3 class=\"ds-card-noir-title\">Phàm Nhân Tu Tiên: Đại Chiến Hư Thiên Điện</h3><p class=\"ds-card-noir-meta\">Tiểu Hổ Tu Tiên · #9450 · 4 giờ 15 phút FULL</p></div></article>",
+      "css": ".ds-card-noir { background: #161822; color: #f4f4f6; border: 1px solid rgba(244, 244, 246, 0.11); border-radius: 12px; padding: 16px; box-shadow: 0 14px 34px -10px rgba(4, 5, 10, 0.72); transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.24s; } .ds-card-noir:hover { transform: translateY(-4px); border-color: rgba(255, 216, 117, 0.36); } .ds-card-noir-title { margin: 0; font-family: 'Be Vietnam Pro', sans-serif; font-size: 15px; font-weight: 700; color: #f4f4f6; } .ds-card-noir-meta { margin: 6px 0 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #ffd875; font-variant-numeric: tabular-nums; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "KV-Cinema Sovereign — The Noir IMAX Screening Room",
+    "overview": "KV-PhimAI is designed as an atmospheric, high-contrast private screening room for 9,220+ curated Vietnamese AI films (Veo, Sora, Seedance, Kling, Runway), bound to the sovereign KV-Tube media engine (https://u.khoavo.vndns.net) with zero third-party YouTube tracking embeds. Inspired by private IMAX projection rooms, Criterion Channel, and MUBI Dark, the interface pairs an Obsidian Projection Void (#0d0e14) and Elevated Screening Slate (#161822) with warm Tungsten Projection Gold (#ffd875) and Cinema Crimson (#e50914).",
+    "keyCharacteristics": [
+      "Dedicated KV-Cinema Sovereign (Noir IMAX Screening Room) visual architecture with integrated header theater controls (Search /, AI Film Assistant, Vertical Swipe Feed, Watch Party & 6-Digit TV Pairing, and direct u.khoavo.vndns.net link).",
+      "High-contrast Vietnamese typography pairing Big Shoulders Display, Be Vietnam Pro, and JetBrains Mono with full diacritic fidelity.",
+      "Mandatory font-variant-numeric: tabular-nums across all ranks, Top 10 numerals, durations, weekly play counts, and category filter badges.",
+      "Complete browser-surface theming (::selection, custom dark scrollbars, :focus-visible tungsten gold rings, and caret colors)."
+    ],
+    "rules": [
+      {
+        "name": "The Tinted-Secondary Rule",
+        "body": "Secondary and muted text never use untinted neutral gray; all secondary ink is tinted toward cool silver-indigo (#c4c8d9 and #989fb8) to harmonize with the #0d0e14 obsidian canvas.",
+        "section": "colors"
+      },
+      {
+        "name": "The No-Kicker Rule",
+        "body": "Headings never carry an eyebrow or kicker label directly above them; metadata badges, ranks, and AI toolchain tags sit below the heading or inside a separate footer bar.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular-Numeral Law",
+        "body": "Every rank (#9450), Top 10 numeral (01–10), view counter, and duration string applies font-variant-numeric: tabular-nums so columns and reels align with mechanical precision.",
+        "section": "typography"
+      },
+      {
+        "name": "The Hairline-Boundary Rule",
+        "body": "Cards, callouts, and list items use uniform 1px solid borders tinted from the foreground or tungsten gold; thick colored side borders (border-left or border-right > 1px) are forbidden.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do route all video streams, thumbnails, and external watch links through https://u.khoavo.vndns.net and local /api/kvtube/* endpoints.",
+      "Do apply font-variant-numeric: tabular-nums to all film ranks (#9450), Top 10 counters, durations, and filter badge counts.",
+      "Do use authored inline SVGs with consistent 1.75 stroke weight for all icons and controls.",
+      "Do place metadata badges, ranks, and AI model tags below headings or in card overlays rather than as eyebrow kickers above headings."
+    ],
+    "donts": [
+      "Don't embed youtube.com or youtube-nocookie.com iframes or link directly to Google video servers anywhere in the interface.",
+      "Don't place small uppercase eyebrow/kicker labels directly above <h1>, <h2>, <h3>, or <h4> elements.",
+      "Don't use CSS gradient text (background-clip: text), thick colored side borders (border-left > 1px), or emoji/Unicode glyphs as UI icons."
+    ]
+  }
+}

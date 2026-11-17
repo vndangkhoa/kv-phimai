@@ -1,0 +1,182 @@
+{
+  "version": 1,
+  "generated": "2026-11-12",
+  "total": 9220,
+  "chunkSize": 500,
+  "chunkCount": 19,
+  "maxRank": 9450,
+  "newCut": 9351,
+  "firstFile": "films-first.json",
+  "indexFile": "search-index.json",
+  "cats": {
+    "fantasy": 795,
+    "ngan": 396,
+    "scifi": 351,
+    "hoathinh": 2277,
+    "dai": 70,
+    "trung": 5082,
+    "kinhdi": 155,
+    "vietnam": 94
+  },
+  "genres": {
+    "xuyên không": 2187,
+    "tu tiên": 1505,
+    "ngôn tình": 1374,
+    "hệ thống": 1152,
+    "trọng sinh": 1113,
+    "mạt thế": 1034,
+    "kỳ ảo": 973,
+    "cổ trang": 936,
+    "tổng tài": 738,
+    "sinh tồn": 655,
+    "viễn tưởng": 368,
+    "gia đình": 342,
+    "kinh dị": 299,
+    "hài hước": 57
+  },
+  "hasGender": {
+    "nam": true,
+    "nu": true
+  },
+  "hasTopView": true,
+  "hasFull": true,
+  "adultCount": 1244,
+  "deadCount": 159,
+  "liveTotal": 9061,
+  "newLive": 100,
+  "chunks": [
+    {
+      "file": "films-0001.json",
+      "firstRank": 1,
+      "lastRank": 512,
+      "count": 500,
+      "bytes": 493734
+    },
+    {
+      "file": "films-0002.json",
+      "firstRank": 513,
+      "lastRank": 1013,
+      "count": 500,
+      "bytes": 394764
+    },
+    {
+      "file": "films-0003.json",
+      "firstRank": 1014,
+      "lastRank": 1513,
+      "count": 500,
+      "bytes": 460744
+    },
+    {
+      "file": "films-0004.json",
+      "firstRank": 1514,
+      "lastRank": 2016,
+      "count": 500,
+      "bytes": 444404
+    },
+    {
+      "file": "films-0005.json",
+      "firstRank": 2017,
+      "lastRank": 2517,
+      "count": 500,
+      "bytes": 394093
+    },
+    {
+      "file": "films-0006.json",
+      "firstRank": 2518,
+      "lastRank": 3018,
+      "count": 500,
+      "bytes": 409932
+    },
+    {
+      "file": "films-0007.json",
+      "firstRank": 3019,
+      "lastRank": 3532,
+      "count": 500,
+      "bytes": 392308
+    },
+    {
+      "file": "films-0008.json",
+      "firstRank": 3533,
+      "lastRank": 4034,
+      "count": 500,
+      "bytes": 401591
+    },
+    {
+      "file": "films-0009.json",
+      "firstRank": 4035,
+      "lastRank": 4535,
+      "count": 500,
+      "bytes": 392289
+    },
+    {
+      "file": "films-0010.json",
+      "firstRank": 4536,
+      "lastRank": 5041,
+      "count": 500,
+      "bytes": 389102
+    },
+    {
+      "file": "films-0011.json",
+      "firstRank": 5042,
+      "lastRank": 5542,
+      "count": 500,
+      "bytes": 378145
+    },
+    {
+      "file": "films-0012.json",
+      "firstRank": 5543,
+      "lastRank": 6118,
+      "count": 500,
+      "bytes": 420838
+    },
+    {
+      "file": "films-0013.json",
+      "firstRank": 6119,
+      "lastRank": 6618,
+      "count": 500,
+      "bytes": 437035
+    },
+    {
+      "file": "films-0014.json",
+      "firstRank": 6619,
+      "lastRank": 7120,
+      "count": 500,
+      "bytes": 405998
+    },
+    {
+      "file": "films-0015.json",
+      "firstRank": 7121,
+      "lastRank": 7620,
+      "count": 500,
+      "bytes": 404397
+    },
+    {
+      "file": "films-0016.json",
+      "firstRank": 7621,
+      "lastRank": 8125,
+      "count": 500,
+      "bytes": 358919
+    },
+    {
+      "file": "films-0017.json",
+      "firstRank": 8126,
+      "lastRank": 8625,
+      "count": 500,
+      "bytes": 341343
+    },
+    {
+      "file": "films-0018.json",
+      "firstRank": 8626,
+      "lastRank": 9230,
+      "count": 500,
+      "bytes": 430721
+    },
+    {
+      "file": "films-0019.json",
+      "firstRank": 9231,
+      "lastRank": 9450,
+      "count": 220,
+      "bytes": 157071
+    }
+  ]
+}
