@@ -17,11 +17,14 @@ import {
 import type { Film, FilterState } from '../types/phimai';
 import {
   CAT_LABEL,
+  dedupeAndContiguousEpisodes,
   formatClock,
   formatViewsVN,
+  getEpisodeInfo,
   getEpisodeNumber,
   getSeriesEpisodes,
   getThumbUrl,
+  isBlockedEpisodeTitle,
 } from '../utils/phimaiUtils';
 import {
   fetchVideoStream,
@@ -176,17 +179,17 @@ export function WatchPage({
   const seriesEpisodes = useMemo(() => {
     const localEps = getSeriesEpisodes(film, allFilms);
     const byId = new Map<string, Film>();
-    for (const ep of apiSeries) if (ep?.id) byId.set(ep.id, ep);
-    for (const ep of localEps) if (ep?.id && !byId.has(ep.id)) byId.set(ep.id, ep);
-    if (!byId.has(film.id)) byId.set(film.id, film);
+    for (const ep of apiSeries) {
+      if (ep?.id && !isBlockedEpisodeTitle(ep.title)) byId.set(ep.id, ep);
+    }
+    for (const ep of localEps) {
+      if (ep?.id && !byId.has(ep.id) && !isBlockedEpisodeTitle(ep.title)) byId.set(ep.id, ep);
+    }
+    if (!byId.has(film.id) && !isBlockedEpisodeTitle(film.title)) byId.set(film.id, film);
 
-    const list = Array.from(byId.values());
+    const list = dedupeAndContiguousEpisodes(Array.from(byId.values()), film.id);
     if (list.length < 2 && getEpisodeNumber(film) === null) return [];
-    return list.sort((a, b) => {
-      const ordA = getEpisodeNumber(a) ?? 9999;
-      const ordB = getEpisodeNumber(b) ?? 9999;
-      return ordA - ordB || a.rank - b.rank;
-    });
+    return list;
   }, [apiSeries, film, allFilms]);
 
   const currentEpIdx = useMemo(
@@ -232,58 +235,80 @@ export function WatchPage({
   );
 
   const relatedList = useMemo(() => {
-    const base: Film[] = [];
-    const seen = new Set<string>([film.id]);
+    const currentBaseKey = getEpisodeInfo(film.title, film.channel).baseKey;
+    const sameSeriesIds = new Set<string>([film.id, ...seriesEpisodes.map((e) => e.id)]);
+    const seen = new Set<string>(sameSeriesIds);
+    const seenSeriesKeys = new Set<string>();
+    const currentTags = new Set(film.tags || []);
 
-    // Prioritize upcoming episodes of the same movie at the top of the Up Next sidebar
-    if ((sideFilter === 'all' || sideFilter === 'channel') && seriesEpisodes.length > 1) {
-      const upcoming =
-        currentEpIdx >= 0
-          ? seriesEpisodes.slice(currentEpIdx + 1)
-          : seriesEpisodes.filter((e) => e.id !== film.id);
-      for (const ep of upcoming) {
-        if (!seen.has(ep.id)) {
-          seen.add(ep.id);
-          base.push(ep);
-        }
-      }
+    const tryAccept = (cand: Film, target: Film[]): boolean => {
+      if (!cand?.id || seen.has(cand.id)) return false;
+      if (isBlockedEpisodeTitle(cand.title)) return false;
+
+      const candInfo = getEpisodeInfo(cand.title, cand.channel);
+      if (currentBaseKey && candInfo.baseKey === currentBaseKey) return false;
+      if (candInfo.baseKey && seenSeriesKeys.has(candInfo.baseKey)) return false;
+
+      seen.add(cand.id);
+      if (candInfo.baseKey) seenSeriesKeys.add(candInfo.baseKey);
+      target.push(cand);
+      return true;
+    };
+
+    const base: Film[] = [];
+    for (const rel of apiRelated) {
+      tryAccept(rel, base);
     }
 
-    for (const rel of apiRelated) {
-      if (rel?.id && !seen.has(rel.id)) {
-        seen.add(rel.id);
-        base.push(rel);
+    const hasSharedTag = (f: Film) =>
+      Array.isArray(f.tags) && f.tags.some((t) => currentTags.has(t));
+
+    for (const f of allFilms) {
+      if (base.length >= 36) break;
+      if (hasSharedTag(f)) {
+        tryAccept(f, base);
       }
     }
     for (const f of allFilms) {
       if (base.length >= 36) break;
-      if (seen.has(f.id)) continue;
       if (f.cat === film.cat || f.channel === film.channel) {
-        seen.add(f.id);
-        base.push(f);
+        tryAccept(f, base);
       }
     }
     for (const f of allFilms) {
       if (base.length >= 40) break;
-      if (!seen.has(f.id)) {
-        seen.add(f.id);
-        base.push(f);
-      }
+      tryAccept(f, base);
     }
 
     if (sideFilter === 'cat') {
       return base.filter((f) => f.cat === film.cat);
     }
     if (sideFilter === 'channel') {
-      const restSameCh = allFilms.filter((f) => !seen.has(f.id) && f.channel === film.channel);
-      const mergedCh = [...base.filter((f) => f.channel === film.channel), ...restSameCh];
+      const sameChFromBase = base.filter((f) => f.channel === film.channel);
+      const restSameCh: Film[] = [];
+      for (const f of allFilms) {
+        if (restSameCh.length >= 30) break;
+        if (f.channel === film.channel) {
+          tryAccept(f, restSameCh);
+        }
+      }
+      const mergedCh = [...sameChFromBase, ...restSameCh];
       return mergedCh.length > 0 ? mergedCh : base;
     }
     if (sideFilter === 'full') {
-      return base.filter((f) => /full|trọn/i.test(f.dur || ''));
+      const fullFromBase = base.filter((f) => /full|trọn/i.test(f.dur || ''));
+      if (fullFromBase.length >= 12) return fullFromBase;
+      const extraFull: Film[] = [...fullFromBase];
+      for (const f of allFilms) {
+        if (extraFull.length >= 24) break;
+        if (/full|trọn/i.test(f.dur || '')) {
+          tryAccept(f, extraFull);
+        }
+      }
+      return extraFull;
     }
     return base;
-  }, [apiRelated, allFilms, film.id, film.cat, film.channel, sideFilter, seriesEpisodes, currentEpIdx]);
+  }, [apiRelated, allFilms, film.id, film.title, film.cat, film.channel, film.tags, sideFilter, seriesEpisodes]);
 
   const avgStars =
     rating && rating.n > 0 ? (rating.s / rating.n).toFixed(1) : '5.0';
@@ -933,26 +958,7 @@ export function WatchPage({
                   {rel.dur && <span className="yt-related-duration">{rel.dur}</span>}
                 </div>
                 <div className="yt-related-info">
-                  <div className="yt-related-title">
-                    {nextSeriesEpisode && rel.id === nextSeriesEpisode.id && (
-                      <span
-                        style={{
-                          display: 'inline-block',
-                          backgroundColor: '#ff0033',
-                          color: '#fff',
-                          fontSize: '10px',
-                          fontWeight: 700,
-                          padding: '1px 5px',
-                          borderRadius: '4px',
-                          marginRight: '5px',
-                          verticalAlign: 'middle',
-                        }}
-                      >
-                        Tập tiếp theo
-                      </span>
-                    )}
-                    {rel.title}
-                  </div>
+                  <div className="yt-related-title">{rel.title}</div>
                   <div className="yt-related-channel">{rel.channel}</div>
                   <div className="yt-related-meta">
                     {formatViewsVN(rel.views)} • {CAT_LABEL[rel.cat] || rel.cat}

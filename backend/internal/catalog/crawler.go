@@ -17,7 +17,22 @@ import (
 	"phimai-backend/internal/models"
 )
 
-var rePlaylistID = regexp.MustCompile(`(?i)[?&]list=([A-Za-z0-9_-]{12,})`)
+var rePlaylistID = regexp.MustCompile(`(?i)[?&]list=(PL[A-Za-z0-9_-]{16,}|UU[A-Za-z0-9_-]{16,}|OL[A-Za-z0-9_-]{16,})`)
+
+func isBlockedSeriesTitle(title string) bool {
+	norm := ViNorm(title)
+	if norm == "" {
+		return false
+	}
+	return containsAny(norm,
+		"kiwi only",
+		"members only",
+		"chi danh cho hoi vien",
+		"hoi vien",
+		"trailer",
+		"teaser",
+	)
+}
 
 type CrawlerStatus struct {
 	IsRunning    bool          `json:"isRunning"`
@@ -56,7 +71,13 @@ func (c *Catalog) loadCrawledFilmsFile(filmMap map[string]models.Film, path stri
 		return
 	}
 	var recent []models.Film
+	var kept []models.Film
+	pruned := false
 	for _, f := range list {
+		if isBlockedSeriesTitle(f.Title) {
+			pruned = true
+			continue
+		}
 		if f.ID == "" || c.DeadIDs[f.ID] {
 			continue
 		}
@@ -67,6 +88,17 @@ func (c *Catalog) loadCrawledFilmsFile(filmMap map[string]models.Film, path stri
 		c.CrawledIDs[f.ID] = true
 		filmMap[f.ID] = f
 		recent = append(recent, f)
+		kept = append(kept, f)
+	}
+	if pruned {
+		if b, err := json.MarshalIndent(kept, "", "  "); err == nil {
+			tmpPath := path + ".tmp"
+			if os.WriteFile(tmpPath, b, 0644) == nil {
+				_ = os.Rename(tmpPath, path)
+			} else {
+				_ = os.WriteFile(path, b, 0644)
+			}
+		}
 	}
 	sort.Slice(recent, func(i, j int) bool {
 		return recent[i].Rank > recent[j].Rank
@@ -236,7 +268,7 @@ func formatCrawledDur(lengthSeconds int) string {
 func classifyCrawledVideo(item kvtube.CrawledVideoItem, defaultCat string, isTrustedChannel bool) (models.Film, bool) {
 	id := strings.TrimSpace(item.VideoID)
 	title := strings.TrimSpace(item.Title)
-	if len(id) < 6 || title == "" {
+	if len(id) < 6 || title == "" || isBlockedSeriesTitle(title) {
 		return models.Film{}, false
 	}
 	// Require concrete duration between 60s and 5h (skip empty/live 0s and tiny Shorts < 60s)
@@ -366,15 +398,26 @@ func (c *Catalog) AddCrawledFilms(candidates []models.Film) (int, []models.Film)
 	defer c.mu.Unlock()
 
 	maxRank := c.BaseMaxRank
+	prunedExisting := false
+	keptFilms := make([]models.Film, 0, len(c.Films))
 	for _, f := range c.Films {
+		if c.CrawledIDs[f.ID] && isBlockedSeriesTitle(f.Title) {
+			delete(c.CrawledIDs, f.ID)
+			prunedExisting = true
+			continue
+		}
 		if f.Rank > maxRank {
 			maxRank = f.Rank
 		}
+		keptFilms = append(keptFilms, f)
+	}
+	if prunedExisting {
+		c.Films = keptFilms
 	}
 
 	var added []models.Film
 	for _, f := range candidates {
-		if f.ID == "" || c.DeadIDs[f.ID] {
+		if f.ID == "" || c.DeadIDs[f.ID] || isBlockedSeriesTitle(f.Title) {
 			continue
 		}
 		if _, exists := c.ByID[f.ID]; exists {
@@ -388,7 +431,7 @@ func (c *Catalog) AddCrawledFilms(candidates []models.Film) (int, []models.Film)
 		added = append(added, f)
 	}
 
-	if len(added) == 0 {
+	if len(added) == 0 && !prunedExisting {
 		return 0, nil
 	}
 
@@ -504,16 +547,26 @@ func (c *Catalog) DiscoverSeriesEpisodes(ctx context.Context, kvt *kvtube.Servic
 		}
 	}
 
-	// 1. Check for official YouTube playlist link inside blurb / blurbLong / live upstream description
+	// 1. Check for official YouTube playlist link inside blurb / blurbLong / full player description / live upstream metadata
 	playlistID := ""
 	if m := rePlaylistID.FindStringSubmatch(film.BlurbLong + " " + film.Blurb); len(m) >= 2 {
 		playlistID = m[1]
 	}
 	if playlistID == "" {
+		descCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		fullDesc := kvt.FetchFullVideoDescription(descCtx, film.ID)
+		cancel()
+		if fullDesc != "" {
+			if m := rePlaylistID.FindStringSubmatch(fullDesc); len(m) >= 2 {
+				playlistID = m[1]
+			}
+		}
+	}
+	if playlistID == "" || c.GetChannelAuthorID(film.Channel) == "" {
 		infoCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		vInfo := kvt.GetVideo(infoCtx, film.ID, &film, nil, nil, nil)
 		cancel()
-		if vInfo.Description != "" {
+		if playlistID == "" && vInfo.Description != "" {
 			if m := rePlaylistID.FindStringSubmatch(vInfo.Description); len(m) >= 2 {
 				playlistID = m[1]
 			}
@@ -543,6 +596,44 @@ func (c *Catalog) DiscoverSeriesEpisodes(ctx context.Context, kvt *kvtube.Servic
 		{q: fmt.Sprintf("\"%s\" Tập", baseTitleRaw), sortByDate: false},
 		{q: fmt.Sprintf("%s Tập", baseTitleRaw), sortByDate: false},
 		{q: fmt.Sprintf("%s Tập", baseTitleRaw), sortByDate: true},
+	}
+
+	// Inspect existing episode numbers and compute contiguous max episode K to target sequential continuation episodes
+	orderSet := make(map[int]bool)
+	for _, ef := range existingSeries {
+		_, _, ord, hp := ExtractSeriesInfo(ef.Title, ef.Channel)
+		if hp && ord >= 0 && ord < 999 {
+			orderSet[ord] = true
+		}
+	}
+	if _, _, ord, hp := ExtractSeriesInfo(film.Title, film.Channel); hp && ord >= 0 && ord < 999 {
+		orderSet[ord] = true
+	}
+	if len(orderSet) > 0 {
+		minEp := -1
+		for ord := range orderSet {
+			if minEp == -1 || ord < minEp {
+				minEp = ord
+			}
+		}
+		if minEp >= 0 {
+			k := minEp
+			for orderSet[k+1] {
+				k++
+			}
+			for ep := k + 1; ep <= k+5; ep++ {
+				queries = append(queries,
+					struct {
+						q          string
+						sortByDate bool
+					}{q: fmt.Sprintf("\"%s\" \"Tập %02d\"", baseTitleRaw, ep), sortByDate: false},
+					struct {
+						q          string
+						sortByDate bool
+					}{q: fmt.Sprintf("%s Tập %d %s", baseTitleRaw, ep, film.Channel), sortByDate: false},
+				)
+			}
+		}
 	}
 	for _, qc := range queries {
 		if ctx.Err() != nil {

@@ -490,7 +490,7 @@ func (c *Catalog) buildSeriesGroups() {
 	groups := make(map[string][]groupMember)
 
 	for _, f := range c.Films {
-		if c.DeadIDs[f.ID] {
+		if c.DeadIDs[f.ID] || isBlockedSeriesTitle(f.Title) {
 			continue
 		}
 		key, _, order, hasPart := ExtractSeriesInfo(f.Title, f.Channel)
@@ -508,15 +508,35 @@ func (c *Catalog) buildSeriesGroups() {
 			if members[i].order != members[j].order {
 				return members[i].order < members[j].order
 			}
-			return members[i].film.Rank < members[j].film.Rank
+			if members[i].film.ViewsNum != members[j].film.ViewsNum {
+				return members[i].film.ViewsNum > members[j].film.ViewsNum
+			}
+			if members[i].film.Rank != members[j].film.Rank {
+				return members[i].film.Rank > members[j].film.Rank
+			}
+			return members[i].film.ID < members[j].film.ID
 		})
-		filmSlice := make([]models.Film, 0, len(members))
+
+		// Deduplicate episodes sharing the same order (keep the best single film per episode order)
+		dedup := make([]groupMember, 0, len(members))
+		seenOrder := make(map[int]bool, len(members))
 		seenID := make(map[string]bool, len(members))
 		for _, m := range members {
-			if !seenID[m.film.ID] {
-				seenID[m.film.ID] = true
-				filmSlice = append(filmSlice, m.film)
+			if seenOrder[m.order] || seenID[m.film.ID] {
+				continue
 			}
+			seenOrder[m.order] = true
+			seenID[m.film.ID] = true
+			dedup = append(dedup, m)
+		}
+
+		// Enforce contiguous episode ordering: stop before any jump > 2 missing episodes
+		filmSlice := make([]models.Film, 0, len(dedup))
+		for i, m := range dedup {
+			if i > 0 && (m.order-dedup[i-1].order-1) > 2 {
+				break
+			}
+			filmSlice = append(filmSlice, m.film)
 		}
 		if len(filmSlice) < 2 {
 			continue
@@ -568,29 +588,95 @@ func (c *Catalog) GetRelated(f models.Film, limit int) []models.Film {
 	if limit <= 0 {
 		limit = 6
 	}
-	var out []models.Film
-	// First same channel
-	for _, cand := range c.Films {
-		if cand.ID == f.ID || c.DeadIDs[cand.ID] {
-			continue
-		}
-		if cand.Channel != "" && cand.Channel == f.Channel {
-			out = append(out, cand)
-			if len(out) >= limit {
-				return out
-			}
+
+	fSeriesKey, _, _, _ := ExtractSeriesInfo(f.Title, f.Channel)
+	sameSeriesIDs := make(map[string]bool)
+	for _, sf := range c.SeriesByFilm[f.ID] {
+		sameSeriesIDs[sf.ID] = true
+	}
+	seenSeriesKeys := make(map[string]bool)
+	if fSeriesKey != "" {
+		seenSeriesKeys[fSeriesKey] = true
+	}
+
+	fTags := make(map[string]bool, len(f.Tags))
+	for _, t := range f.Tags {
+		nt := strings.ToLower(strings.TrimSpace(t))
+		if nt != "" {
+			fTags[nt] = true
 		}
 	}
-	// Then same category
+
+	type scoredCand struct {
+		film  models.Film
+		score int
+	}
+	var scored []scoredCand
 	for _, cand := range c.Films {
-		if cand.ID == f.ID || c.DeadIDs[cand.ID] {
+		if cand.ID == f.ID || c.DeadIDs[cand.ID] || sameSeriesIDs[cand.ID] {
 			continue
 		}
-		if cand.Cat == f.Cat && cand.Channel != f.Channel {
-			out = append(out, cand)
-			if len(out) >= limit {
-				return out
+		score := 0
+		if len(fTags) > 0 && len(cand.Tags) > 0 {
+			for _, ct := range cand.Tags {
+				if fTags[strings.ToLower(strings.TrimSpace(ct))] {
+					score += 3
+				}
 			}
+		}
+		if cand.Cat != "" && cand.Cat == f.Cat {
+			score += 4
+		}
+		if cand.Channel != "" && cand.Channel == f.Channel {
+			score += 2
+		}
+		if score > 0 {
+			scored = append(scored, scoredCand{film: cand, score: score})
+		}
+	}
+
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		if scored[i].film.ViewsNum != scored[j].film.ViewsNum {
+			return scored[i].film.ViewsNum > scored[j].film.ViewsNum
+		}
+		return scored[i].film.Rank > scored[j].film.Rank
+	})
+
+	out := make([]models.Film, 0, limit)
+	seenID := make(map[string]bool, limit)
+	tryAppend := func(cand models.Film) bool {
+		if cand.ID == f.ID || c.DeadIDs[cand.ID] || sameSeriesIDs[cand.ID] || seenID[cand.ID] {
+			return false
+		}
+		if isBlockedSeriesTitle(cand.Title) {
+			return false
+		}
+		candSeriesKey, _, _, _ := ExtractSeriesInfo(cand.Title, cand.Channel)
+		if fSeriesKey != "" && candSeriesKey == fSeriesKey {
+			return false
+		}
+		if candSeriesKey != "" {
+			if seenSeriesKeys[candSeriesKey] {
+				return false
+			}
+			seenSeriesKeys[candSeriesKey] = true
+		}
+		seenID[cand.ID] = true
+		out = append(out, cand)
+		return len(out) >= limit
+	}
+
+	for _, sc := range scored {
+		if tryAppend(sc.film) {
+			return out
+		}
+	}
+	for _, cand := range c.Films {
+		if tryAppend(cand) {
+			return out
 		}
 	}
 	return out

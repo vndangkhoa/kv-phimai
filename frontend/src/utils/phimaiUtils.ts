@@ -647,6 +647,67 @@ export function getEpisodeInfo(
   return { baseKey: '', baseTitle: '', epNum };
 }
 
+const BLOCKED_EPISODE_PHRASES = [
+  'kiwi only',
+  'members only',
+  'chi danh cho hoi vien',
+  'hoi vien',
+  'trailer',
+  'teaser',
+];
+
+export function isBlockedEpisodeTitle(title: string): boolean {
+  const n = normSeries(title);
+  return BLOCKED_EPISODE_PHRASES.some((phrase) => n.includes(phrase));
+}
+
+export function dedupeAndContiguousEpisodes(films: Film[], activeFilmId?: string): Film[] {
+  const seenIds = new Set<string>();
+  const byEpNum = new Map<number, Film>();
+  const unnumbered: Film[] = [];
+
+  for (const f of films) {
+    if (!f?.id || seenIds.has(f.id) || isBlockedEpisodeTitle(f.title)) continue;
+    seenIds.add(f.id);
+
+    const epNum = getEpisodeNumber(f);
+    if (epNum === null) {
+      unnumbered.push(f);
+      continue;
+    }
+
+    const existing = byEpNum.get(epNum);
+    if (
+      !existing ||
+      f.id === activeFilmId ||
+      (existing.id !== activeFilmId && viewsNumber(f) > viewsNumber(existing))
+    ) {
+      byEpNum.set(epNum, f);
+    }
+  }
+
+  const sorted = [...byEpNum.values(), ...unnumbered].sort((a, b) => {
+    const ordA = getEpisodeNumber(a) ?? 9999;
+    const ordB = getEpisodeNumber(b) ?? 9999;
+    return ordA - ordB || a.rank - b.rank;
+  });
+
+  const contiguous: Film[] = [];
+  let prevEpNum: number | null = null;
+  for (const ep of sorted) {
+    const curEpNum = getEpisodeNumber(ep);
+    if (prevEpNum !== null && curEpNum !== null && curEpNum - prevEpNum > 2) {
+      break;
+    }
+    contiguous.push(ep);
+    if (curEpNum !== null) {
+      prevEpNum = curEpNum;
+    }
+  }
+
+  return contiguous;
+}
+
 export function getSeriesEpisodes(film: Film, allFilms: Film[]): Film[] {
   const info = getEpisodeInfo(film.title, film.channel);
   const base = info.baseKey;
@@ -658,6 +719,7 @@ export function getSeriesEpisodes(film: Film, allFilms: Film[]): Film[] {
 
   for (const f of allFilms) {
     if (!f?.id || seen.has(f.id)) continue;
+    if (isBlockedEpisodeTitle(f.title)) continue;
     const fCh = normSeries(f.channel || '');
     if (targetChannel && fCh && fCh !== targetChannel) continue;
 
@@ -670,15 +732,9 @@ export function getSeriesEpisodes(film: Film, allFilms: Film[]): Film[] {
     }
   }
 
-  if (candidates.length < 2 && info.epNum === null) return [];
-  return candidates
-    .slice()
-    .sort((a, b) => {
-      const ordA = getEpisodeNumber(a) ?? 9999;
-      const ordB = getEpisodeNumber(b) ?? 9999;
-      return ordA - ordB || a.rank - b.rank;
-    })
-    .slice(0, 120);
+  const ordered = dedupeAndContiguousEpisodes(candidates, film.id);
+  if (ordered.length < 2 && info.epNum === null) return [];
+  return ordered.slice(0, 120);
 }
 
 // 18+ age verification helpers (device-local)

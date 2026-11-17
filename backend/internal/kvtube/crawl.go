@@ -118,6 +118,43 @@ func extractInnerTubeRenderers(node interface{}, out *[]CrawledVideoItem, seen m
 	}
 }
 
+func hasBlockedBadge(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return false
+	}
+	s := string(raw)
+	sl := strings.ToLower(s)
+	return strings.Contains(s, "MEMBERS_ONLY") ||
+		strings.Contains(sl, "members only") ||
+		strings.Contains(sl, "hội viên")
+}
+
+func isMembersOnlyOrBlocked(vr map[string]interface{}, title string) bool {
+	lt := strings.ToLower(title)
+	for _, kw := range []string{
+		"kiwi only",
+		"members only",
+		"hội viên",
+		"chi danh cho hoi vien",
+		"trailer",
+		"teaser",
+	} {
+		if strings.Contains(lt, kw) {
+			return true
+		}
+	}
+	if vr != nil {
+		if hasBlockedBadge(vr["badges"]) || hasBlockedBadge(vr["ownerBadges"]) {
+			return true
+		}
+	}
+	return false
+}
+
 func parseVideoRenderer(vr map[string]interface{}) (CrawledVideoItem, bool) {
 	id, _ := vr["videoId"].(string)
 	id = strings.TrimSpace(id)
@@ -126,7 +163,7 @@ func parseVideoRenderer(vr map[string]interface{}) (CrawledVideoItem, bool) {
 	}
 
 	title := extractRunsText(vr["title"])
-	if title == "" {
+	if title == "" || isMembersOnlyOrBlocked(vr, title) {
 		return CrawledVideoItem{}, false
 	}
 
@@ -201,7 +238,7 @@ func (s *Service) searchInvidious(ctx context.Context, query string, sortByDate 
 	for _, entry := range arr {
 		id, _ := entry["videoId"].(string)
 		title, _ := entry["title"].(string)
-		if id == "" || title == "" {
+		if id == "" || title == "" || isMembersOnlyOrBlocked(entry, title) {
 			continue
 		}
 		author, _ := entry["author"].(string)
@@ -386,7 +423,7 @@ func extractPlaylistRenderers(node interface{}, defaultChannel string, out *[]Cr
 		if pr, ok := val["playlistVideoRenderer"].(map[string]interface{}); ok {
 			id, _ := pr["videoId"].(string)
 			title := extractSimpleOrRunsText(pr["title"])
-			if id != "" && title != "" && !seen[id] {
+			if id != "" && title != "" && !seen[id] && !isMembersOnlyOrBlocked(pr, title) {
 				seen[id] = true
 				ch := extractSimpleOrRunsText(pr["shortBylineText"])
 				if ch == "" {
@@ -448,7 +485,7 @@ func (s *Service) fetchPlaylistInvidious(ctx context.Context, playlistID string,
 	for _, entry := range pl.Videos {
 		id, _ := entry["videoId"].(string)
 		title, _ := entry["title"].(string)
-		if id == "" || title == "" {
+		if id == "" || title == "" || isMembersOnlyOrBlocked(entry, title) {
 			continue
 		}
 		ch, _ := entry["author"].(string)
@@ -468,6 +505,58 @@ func (s *Service) fetchPlaylistInvidious(ctx context.Context, playlistID string,
 		})
 	}
 	return out, nil
+}
+
+// FetchFullVideoDescription retrieves the untruncated video description via InnerTube player API,
+// falling back to fetchRawInvidiousVideo / GetVideo description if InnerTube fails.
+func (s *Service) FetchFullVideoDescription(ctx context.Context, videoID string) string {
+	videoID = strings.TrimSpace(videoID)
+	if videoID == "" {
+		return ""
+	}
+	payload := map[string]interface{}{
+		"context": map[string]interface{}{
+			"client": map[string]interface{}{
+				"clientName":    "WEB",
+				"clientVersion": "2.20250317.01.00",
+				"hl":            "vi",
+				"gl":            "VN",
+			},
+		},
+		"videoId": videoID,
+	}
+	if bodyBytes, err := json.Marshal(payload); err == nil {
+		if req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://www.youtube.com/youtubei/v1/player?prettyPrint=false", bytes.NewReader(bodyBytes)); err == nil {
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json")
+			req.Header.Set("Accept-Language", "vi-VN,vi;q=0.9,en-US;q=0.8")
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+			if resp, err := s.doRequest(req, false, bodyBytes); err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					if raw, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024)); err == nil {
+						var root map[string]interface{}
+						if json.Unmarshal(raw, &root) == nil {
+							if vd, ok := root["videoDetails"].(map[string]interface{}); ok {
+								if desc, ok := vd["shortDescription"].(string); ok && strings.TrimSpace(desc) != "" {
+									return strings.TrimSpace(desc)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if _, raw, err := s.fetchRawInvidiousVideo(ctx, videoID); err == nil && raw != nil {
+		if desc, ok := raw["description"].(string); ok && strings.TrimSpace(desc) != "" {
+			return strings.TrimSpace(desc)
+		}
+		if descHTML, ok := raw["descriptionHtml"].(string); ok && strings.TrimSpace(descHTML) != "" {
+			return strings.TrimSpace(descHTML)
+		}
+	}
+	return strings.TrimSpace(s.GetVideo(ctx, videoID, nil, nil, nil, nil).Description)
 }
 
 func extractSimpleOrRunsText(v interface{}) string {
