@@ -27,7 +27,7 @@ func main() {
 
 	db := database.InitDB(cfg.DatabaseURL, cfg.DataDir)
 	cat := catalog.NewCatalog(cfg.DataDir, cfg.KVTubeURL)
-	kvt := kvtube.NewService(cfg.KVTubeURL, cfg.InvidiousUpstream)
+	kvt := kvtube.NewService(cfg.CompanionURL, cfg.InvidiousUpstream)
 	kvt.OnDeadVideo = cat.MarkDead
 	handler := api.NewHandler(db, cat, kvt)
 
@@ -130,7 +130,13 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("KV-PhimAI Backend starting on http://0.0.0.0:%s (KV-Tube: %s)", cfg.Port, cfg.KVTubeURL)
+		log.Printf("KV-PhimAI Backend starting on http://0.0.0.0:%s", cfg.Port)
+		if kvt.IsConfigured() {
+			log.Printf("Video backend: Invidious API %s | Companion %s", cfg.InvidiousUpstream, cfg.CompanionURL)
+		} else {
+			log.Printf("WARNING: no video backend configured — films can be browsed but not played.")
+			log.Printf("         Set KVTUBE_URL (your KV-Tube) or INVIDIOUS_UPSTREAM + COMPANION_URL (your Invidious + Companion).")
+		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}

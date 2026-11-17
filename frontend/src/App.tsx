@@ -9,6 +9,7 @@ import { WatchPage } from './components/WatchPage';
 import { ChannelPage } from './components/ChannelPage';
 import { ChannelsDirectoryPage } from './components/ChannelsDirectoryPage';
 import { PersistentPlayer } from './components/PersistentPlayer';
+import { BackendSetupNotice } from './components/BackendSetupNotice';
 import {
   CAT_LABEL,
   GENRE_GROUPS,
@@ -158,6 +159,8 @@ export function App() {
   // Catalog metadata
   const [manifestCategories, setManifestCategories] = useState<Record<string, number>>({});
   const [onlineCount, setOnlineCount] = useState(48);
+  // false = this server has no Invidious / KV-Tube video backend configured yet
+  const [backendConfigured, setBackendConfigured] = useState(true);
   const [hotCounts, setHotCounts] = useState<Record<string, number>>({});
   const [ratings, setRatings] = useState<Record<string, { s: number; n: number }>>({});
 
@@ -293,12 +296,16 @@ export function App() {
         fetch('/api/stats').then((r) => (r.ok ? r.json() : null)),
         fetch('/api/hot').then((r) => (r.ok ? r.json() : null)),
         fetch('/api/ratings').then((r) => (r.ok ? r.json() : null)),
+        fetch('/api/health').then((r) => (r.ok ? r.json() : null)),
       ]).then((res) => {
         if (cancelled) return;
-        const [st, ht, rt] = res;
+        const [st, ht, rt, hl] = res;
         if (st.status === 'fulfilled' && st.value?.online) setOnlineCount(Number(st.value.online));
         if (ht.status === 'fulfilled' && ht.value?.counts) setHotCounts(ht.value.counts);
         if (rt.status === 'fulfilled' && rt.value?.ratings) setRatings(rt.value.ratings);
+        if (hl.status === 'fulfilled' && hl.value && typeof hl.value.backendConfigured === 'boolean') {
+          setBackendConfigured(hl.value.backendConfigured);
+        }
       });
 
       try {
@@ -687,6 +694,7 @@ export function App() {
               : 'sidebar-collapsed'
         }`}
       >
+        {!backendConfigured && <BackendSetupNotice />}
         {isWatchMode && activeFilm ? (
           <WatchPage
             film={activeFilm}

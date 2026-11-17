@@ -37,7 +37,11 @@ COPY --from=frontend-builder /app/frontend/dist ./dist
 ENV PORT=8090
 ENV DATA_DIR=/app/data
 ENV DATABASE_URL=/app/data/phimai.db
-ENV KVTUBE_URL=https://u.khoavo.vndns.net
+# Video backend is NOT bundled. Set one of these at `docker run` time (see README "Self-hosting"):
+#   KVTUBE_URL=https://your-kvtube.example                 (KV-Tube: provides /api/invidious + /companion)
+#   INVIDIOUS_UPSTREAM=https://invidious.example            (plain Invidious API root)
+#   COMPANION_URL=https://invidious.example                 (host serving /companion/..., if different)
+ENV KVTUBE_URL=""
 ENV WARP_PROXY=http://127.0.0.1:29083
 ENV TZ=Asia/Ho_Chi_Minh
 

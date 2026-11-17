@@ -86,15 +86,16 @@ func (h *Handler) GetHealth(w http.ResponseWriter, r *http.Request) {
 	totalFilms, liveTotal := h.Catalog.GetLiveCounts()
 	crawlSt := h.Catalog.GetCrawlerStatus()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":       "healthy",
-		"ok":           true,
-		"service":      "phimai",
-		"version":      "1.0.10",
-		"warpActive":   h.KVTube.IsWarpActive(),
-		"warpProxy":    h.KVTube.WarpProxyURL,
-		"totalFilms":   totalFilms,
-		"liveFilms":    liveTotal,
-		"totalCrawled": crawlSt.TotalCrawled,
+		"status":            "healthy",
+		"ok":                true,
+		"service":           "phimai",
+		"version":           "1.0.11",
+		"backendConfigured": h.KVTube.IsConfigured(),
+		"warpActive":        h.KVTube.IsWarpActive(),
+		"warpProxy":         h.KVTube.WarpProxyURL,
+		"totalFilms":        totalFilms,
+		"liveFilms":         liveTotal,
+		"totalCrawled":      crawlSt.TotalCrawled,
 	})
 }
 
@@ -274,6 +275,15 @@ func (h *Handler) GetKVTubeVideo(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "missing video id"})
+		return
+	}
+
+	if !h.KVTube.IsConfigured() {
+		writeJSON(w, http.StatusOK, models.KVTubeVideoResponse{
+			ID:                id,
+			Unavailable:       true,
+			UnavailableReason: "Máy chủ chưa kết nối nguồn video. Quản trị viên cần cài KV-Tube hoặc Invidious + Companion và đặt địa chỉ (KVTUBE_URL) — xem hướng dẫn tự host.",
+		})
 		return
 	}
 

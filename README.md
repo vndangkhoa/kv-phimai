@@ -1,60 +1,103 @@
-# KV-PhimAI — KV-Cinema Sovereign (Noir IMAX Screening Room)
+# KV-PhimAI
 
-**KV-PhimAI** is a standalone, single-container web application for discovering, streaming, and watching **9,220+ AI-generated films** (`Veo`, `Sora`, `Seedance`, `Kling`, `Runway`, `Higgsfield`, `Wan`) with Vietnamese dubbing, subtitles, series episode grouping, natural-language AI film search, 12-hour Watch Party rooms, and 6-digit TV pairing.
+Self-hosted Vietnamese AI-film streaming site: a curated catalog of 9,000+ AI films and short dramas (Vietnamese dubbed / subtitled), auto-updated with new releases, with series episode grouping, adaptive-quality playback, ratings and timestamped comments.
 
-Built on the **KV-Netflix Stack** (`Go Chi + SQLite` backend + `React 19 + TypeScript + Vite + Tailwind CSS` SPA) and powered by **KV-Tube** (`https://u.khoavo.vndns.net`) for zero-Google/YouTube direct iframe tracking and strict Companion WARP stream IP-symmetry.
+One container: Go (Chi + SQLite) backend + React SPA.
 
----
-
-## KV-Cinema Sovereign Interface (Noir IMAX Screening Room)
-
-- **Atmosphere & Palette**: Deep Obsidian Projection Void (`#0d0e14`), Elevated Screening Slate (`#161822`), warm Tungsten Projection Gold (`#ffd875`), and Cinema Crimson (`#e50914`).
-- **Top Cinema Control Ribbon**: Instant `/` search focus, live viewer presence badge, one-click **AI Film Assistant** (`Trợ Lý AI`), **Vertical Swipe Feed** (`Lướt Phim Dọc`), **12-Hour Watch Party & 6-Digit TV Pairing** (`Xem Chung & TV`), direct **KV-Tube (`u.khoavo.vndns.net`)** link, and collapsible sidebar toggle.
-- **Full-Bleed Widescreen Hero Stage**: 12-column IMAX projection stage with AI toolchain badges, `#rank` & runtime pills, 6-film interactive carousel strip, and pinned Studio Spotlight footer bar.
-- **Cinema Reels & Tactile Filter Deck**: Horizontal scroll-snap reels for *Tiếp Tục Xem Dở*, *Top 10 Phim AI Thịnh Hành Trong Tuần* (with oversized `01`–`10` tabular rank numerals), and *Suất Chiếu Marathon Trọn Bộ*, paired with multi-facet category, `#genre`, mood, duration, and Family Mode (`Ẩn 18+`) filters.
+> [!IMPORTANT]
+> **PhimAI does not include a video backend.** It only plays videos through an **Invidious + Invidious Companion** server that you run yourself — either inside **[KV-Tube](https://github.com/vndangkhoa/kv-tube)** (easiest) or a standalone Invidious install. Without one, the catalog can be browsed but nothing plays, and the site shows a "Chưa kết nối máy chủ phát video" notice.
 
 ---
 
-## Architecture & KV-Tube Stream Integration
+## Self-hosting
 
-- **Zero Direct YouTube Embeds**: Every video metadata request, MP4 stream, DASH/HLS manifest, caption track, and thumbnail routes through `https://u.khoavo.vndns.net` (`/api/kvtube/video/{id}`, `/api/kvtube/stream/{id}`, `/api/kvtube/thumb/{id}`).
-- **Range-Enabled Streaming Proxy**: `/api/kvtube/stream/{id}` forwards `Range` headers with `Accept-Encoding: identity` and response-header-only timeouts (`WriteTimeout: 0`) so multi-hour marathon films never cut off.
-- **Full 9,220-Film Catalog Offline & Online**: Pre-seeded in `backend/data/` (`manifest.json`, `search-index.json`, `films-first.json`, `films-new.json`, `films-hot.json`, `hot.json`, `topweek.json`, `ratings.json`, `comment-counts.json`, `wall.json`, `suggest.json`, `screening.json`, `meta-extra.json`) and persisted in SQLite (`phimai.db`).
+### 1. Get a video backend (pick one)
 
----
+| Option | What you run | Address to give PhimAI |
+|---|---|---|
+| **A. KV-Tube** (recommended) | [KV-Tube](https://github.com/vndangkhoa/kv-tube) via its Docker Compose stack, or the KV-Tube SPK for Synology. It already bundles Invidious, Companion and a WARP proxy. (Not KV-Tube's single-container "all-in-one" image — that one has no Invidious.) | The KV-Tube web address (port `3241` by default), e.g. `http://192.168.1.10:3241` or `https://kvtube.example.com` → `KVTUBE_URL` |
+| **B. Invidious + Companion** | Your own [Invidious](https://docs.invidious.io/installation/) with [Invidious Companion](https://github.com/iv-org/invidious-companion), with Companion reachable at `/companion/` (the standard Invidious reverse-proxy setup). | The Invidious address → `INVIDIOUS_UPSTREAM` (and `COMPANION_URL` if Companion is on a different host) |
 
-## REST API Endpoints (`PORT=8090`)
+PhimAI talks to the backend **server-to-server**, so the address only needs to be reachable from the PhimAI container (a LAN IP is fine). Viewers never connect to it directly.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/health` | Service health, KV-Tube upstream URL, and catalog counts |
-| `GET` | `/api/manifest` | Catalog manifest, category/genre counts, and curated playlists |
-| `GET` | `/api/films` | Paginated catalog filter (`sort=new\|hot\|topview\|vote\|random`, `cat`, `genre`, `full=1`, `mood`, `time`, `family=1`, `q`, `channel`, `tool`, `page`, `limit`) |
-| `GET` | `/api/films/search?q=...` | Vietnamese accent-insensitive full-text & tag search across 9,220 films |
-| `GET` | `/api/films/{id}` | Film metadata, auto-grouped series episodes, related films, ratings, and KV-Tube URLs |
-| `GET` | `/api/kvtube/video/{id}` | Extracts & rewrites stream/manifest/caption URLs via `https://u.khoavo.vndns.net/api/invidious/api/v1/videos/{id}?local=true` |
-| `GET` | `/api/kvtube/stream/{id}` | Range-enabled MP4 stream proxy via `https://u.khoavo.vndns.net/api/invidious/latest_version` |
-| `GET` | `/api/kvtube/thumb/{id}` | Cached poster thumbnail proxy via `https://u.khoavo.vndns.net/api/invidious/vi/{id}/hqdefault.jpg` with SVG fallback |
-| `GET/POST` | `/api/stats`, `/api/visit`, `/api/sitebeat`, `/api/view`, `/api/presence` | Real-time viewer presence and playback counters |
-| `GET/POST` | `/api/hot`, `/api/topweek`, `/api/ratings`, `/api/rate` | All-time hot counts, Top 10 Weekly chart, and 5-star ratings |
-| `GET/POST` | `/api/comment-counts`, `/api/comments` | Timestamped film comments |
-| `GET/POST` | `/api/wall`, `/api/wall-like`, `/api/suggest`, `/api/screening` | Community discussion wall, film suggestions, and Saturday 20:00 screening room |
-| `GET/POST` | `/api/room-create`, `/api/room`, `/api/room-state`, `/api/room-chat` | 12-hour synchronized Watch Party rooms with live chat |
-| `GET/POST` | `/api/tv-pair` | 6-character Smart TV / Android TV pairing (`create`, `link`, `status`) |
+### 2. Configure PhimAI
 
----
+| Variable | Required | Meaning |
+|---|---|---|
+| `KVTUBE_URL` | Option A | KV-Tube base URL. PhimAI uses `<KVTUBE_URL>/api/invidious` (Invidious API) and `<KVTUBE_URL>/companion` (Companion). |
+| `INVIDIOUS_UPSTREAM` | Option B | Invidious API root, e.g. `https://invidious.example.com`. Overrides the one derived from `KVTUBE_URL`. |
+| `COMPANION_URL` | Optional | Host that serves `/companion/...`. Defaults to `KVTUBE_URL`, otherwise to the Invidious host. |
+| `WARP_PROXY` | Optional | Cloudflare WARP proxy used when YouTube rate-limits the server. Default: built-in `usque` at `http://127.0.0.1:29083`. Set `off` to disable. |
+| `PORT`, `DATA_DIR`, `DATABASE_URL`, `TZ` | Optional | Defaults: `8090`, `/app/data`, `/app/data/phimai.db`, container TZ. |
 
-## Quick Start
+Check the result at `http://<host>:<port>/api/health` → `"backendConfigured": true`.
 
-### Local Build & Run
+### 3. Run it
+
+**Docker**
 ```bash
-chmod +x start.sh
-./start.sh build
-./start.sh serve
-# Open http://localhost:8090
+docker run -d --name kv-phimai --restart unless-stopped \
+  -p 8090:8090 \
+  -v ./data:/app/data \
+  -e KVTUBE_URL=https://kvtube.example.com \
+  vndangkhoa/kv-phimai:latest
+# Option B instead: -e INVIDIOUS_UPSTREAM=https://invidious.example.com
 ```
 
-### Docker Compose
+**Docker Compose** — edit [`docker-compose.yml`](docker-compose.yml) (or export `KVTUBE_URL`), then:
 ```bash
-docker compose up -d --build
+docker compose up -d
+```
+
+**Synology (SPK)** — install *KV PhimAI* from the package source `https://syno.vndns.net`. The install wizard asks for the **video backend URL** and type (KV-Tube or Invidious). To change it later, run *Upgrade* or *Repair* on the package and enter the new address (leave blank to keep the current one).
+
+### Changing the backend later
+Re-create the container with the new environment variable (Docker), or re-run the SPK wizard (Synology). The catalog, ratings and comments in the data volume are kept.
+
+---
+
+## Thiết lập tự host (Tiếng Việt)
+
+PhimAI **không kèm máy chủ phát video**. Bạn cần tự chạy **KV-Tube** (khuyên dùng — đã gồm Invidious + Companion) hoặc **Invidious + Invidious Companion** riêng, rồi khai báo địa chỉ:
+
+- KV-Tube: đặt `KVTUBE_URL=https://dia-chi-kvtube-cua-ban`
+- Invidious: đặt `INVIDIOUS_UPSTREAM=https://dia-chi-invidious` (và `COMPANION_URL` nếu Companion nằm ở máy khác)
+- Gói SPK Synology: nhập địa chỉ ở bước "Máy chủ video" khi cài; muốn đổi thì chạy *Nâng cấp/Sửa chữa* gói.
+
+Kiểm tra tại `/api/health` → `"backendConfigured": true`. Nếu chưa cấu hình, trang web vẫn hiện danh sách phim nhưng không phát được và sẽ hiển thị thông báo hướng dẫn.
+
+---
+
+## How it works
+
+```
+Browser ──► PhimAI (Go, :8090) ──► your Invidious API      (video info, formats, thumbnails)
+                    │            └─► your Invidious Companion (video stream bytes)
+                    └─► YouTube search / RSS  (background crawler for new AI films)
+```
+
+- The catalog (seed JSON + auto-crawled films) lives in memory; the browser downloads it and filters locally.
+- Every stream URL is rewritten to the same origin (`/api/invidious/...`), so viewers only ever talk to PhimAI.
+- Playback uses adaptive DASH (Shaka Player) with a progressive MP4 fallback.
+- New AI films and short dramas are crawled every 30 minutes and saved to `crawled-films.json` in the data volume.
+
+## Main API endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/health` | Version, catalog counts, `backendConfigured` |
+| `GET` | `/api/films` | Catalog filter/sort/paginate (`sort`, `cat`, `genre`, `q`, `channel`, `page`, `limit`) |
+| `GET` | `/api/films/{id}` | Film detail, series episodes, related films |
+| `GET/POST` | `/api/films/{id}/episodes` | Discover missing episodes of the same series |
+| `GET` | `/api/video/{id}` | Stream formats for the player (same-origin URLs) |
+| `GET` | `/api/kvtube/thumb/{id}` | Cached thumbnail proxy |
+| `GET/POST` | `/api/crawler/status`, `/api/crawler/sync` | Auto-crawler status / run now |
+| `GET/POST` | `/api/ratings`, `/api/rate`, `/api/comments` | Ratings and timestamped comments |
+
+## Development
+
+```bash
+export KVTUBE_URL=https://kvtube.example.com   # your backend
+./start.sh build   # build Go backend + React frontend
+./start.sh serve   # http://localhost:8090
 ```

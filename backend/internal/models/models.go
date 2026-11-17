@@ -73,21 +73,21 @@ type KVTubeCaption struct {
 }
 
 type KVTubeVideoResponse struct {
-	ID              string                   `json:"id"`
-	Title           string                   `json:"title"`
-	Author          string                   `json:"author"`
-	AuthorID        string                   `json:"authorId"`
-	Description     string                   `json:"description,omitempty"`
-	LengthSeconds   int                      `json:"lengthSeconds"`
-	ViewCount       int64                    `json:"viewCount"`
-	WatchURL        string                   `json:"watchUrl"`
-	EmbedURL        string                   `json:"embedUrl"`
-	ChannelURL      string                   `json:"channelUrl"`
-	ThumbnailURL    string                   `json:"thumbnailUrl"`
-	DirectStreamURL string                   `json:"directStreamUrl"`
-	BestAudioURL    string                   `json:"bestAudioUrl,omitempty"`
-	HlsURL          string                   `json:"hlsUrl,omitempty"`
-	DashURL         string                   `json:"dashUrl,omitempty"`
+	ID                string                   `json:"id"`
+	Title             string                   `json:"title"`
+	Author            string                   `json:"author"`
+	AuthorID          string                   `json:"authorId"`
+	Description       string                   `json:"description,omitempty"`
+	LengthSeconds     int                      `json:"lengthSeconds"`
+	ViewCount         int64                    `json:"viewCount"`
+	WatchURL          string                   `json:"watchUrl"`
+	EmbedURL          string                   `json:"embedUrl"`
+	ChannelURL        string                   `json:"channelUrl"`
+	ThumbnailURL      string                   `json:"thumbnailUrl"`
+	DirectStreamURL   string                   `json:"directStreamUrl"`
+	BestAudioURL      string                   `json:"bestAudioUrl,omitempty"`
+	HlsURL            string                   `json:"hlsUrl,omitempty"`
+	DashURL           string                   `json:"dashUrl,omitempty"`
 	Streams           []KVTubeStreamItem       `json:"streams"`
 	FormatStreams     []map[string]interface{} `json:"formatStreams,omitempty"`
 	AdaptiveFormats   []map[string]interface{} `json:"adaptiveFormats,omitempty"`
@@ -95,8 +95,8 @@ type KVTubeVideoResponse struct {
 	Unavailable       bool                     `json:"unavailable,omitempty"`
 	UnavailableReason string                   `json:"unavailableReason,omitempty"`
 	Film              *Film                    `json:"film,omitempty"`
-	Series          []Film                   `json:"series,omitempty"`
-	Related         []Film                   `json:"related,omitempty"`
+	Series            []Film                   `json:"series,omitempty"`
+	Related           []Film                   `json:"related,omitempty"`
 }
 
 // SQLite Persisted Models

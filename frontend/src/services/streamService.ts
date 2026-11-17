@@ -132,17 +132,40 @@ export function proxySameOriginUrl(raw?: string | null): string {
   return trimmed;
 }
 
+const BW_STORAGE_KEY = 'phimai_bw_estimate_v1';
+const BW_STORAGE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+
+/** Rough Mbps needed per resolution when a stream has no bitrate info. */
+function mbpsNeededForHeight(height: number): number {
+  if (height >= 2160) return 18;
+  if (height >= 1440) return 9;
+  if (height >= 1080) return 4.5;
+  if (height >= 720) return 2.2;
+  if (height >= 480) return 1.1;
+  if (height >= 360) return 0.6;
+  return 0.4;
+}
+
+/** Mbps a quality option needs to play smoothly (35% headroom, plus audio track if separate). */
+export function mbpsNeededForQuality(q: QualityOption): number {
+  if (q.bitrate && q.bitrate > 0) {
+    return (q.bitrate / 1_000_000) * 1.35 + (q.hasAudio ? 0 : 0.16);
+  }
+  return mbpsNeededForHeight(q.height);
+}
+
 export class BandwidthMonitor {
   private emaMbps: number;
   private listeners = new Set<(mbps: number) => void>();
 
   constructor() {
-    this.emaMbps = this.detectInitialMbps();
+    this.emaMbps = this.loadSaved() ?? this.detectInitialMbps();
     if (typeof navigator !== 'undefined' && (navigator as any).connection?.addEventListener) {
       try {
         (navigator as any).connection.addEventListener('change', () => {
           const dl = Number((navigator as any).connection?.downlink || 0);
-          if (dl > 0) {
+          // downlink is capped at 10 by Chrome; only trust it as a downgrade signal
+          if (dl > 0 && dl < 10 && dl < this.emaMbps) {
             this.emaMbps = dl;
             this.emit();
           }
@@ -150,6 +173,24 @@ export class BandwidthMonitor {
       } catch {
         // ignore
       }
+    }
+  }
+
+  private loadSaved(): number | null {
+    try {
+      const raw = JSON.parse(localStorage.getItem(BW_STORAGE_KEY) || 'null');
+      if (raw && raw.mbps > 0 && Date.now() - raw.ts < BW_STORAGE_TTL_MS) return Number(raw.mbps);
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  private save(): void {
+    try {
+      localStorage.setItem(BW_STORAGE_KEY, JSON.stringify({ mbps: this.emaMbps, ts: Date.now() }));
+    } catch {
+      // ignore
     }
   }
 
@@ -173,37 +214,82 @@ export class BandwidthMonitor {
     return 18;
   }
 
-  public recordTransfer(bytes: number, durationMs: number): void {
-    if (bytes < 4096 || durationMs <= 0) return;
+  /** Feed a real media download (bytes over transfer time, excluding connection latency). */
+  public recordTransfer(bytes: number, durationMs: number, weight = 0.5): void {
+    if (bytes < 64 * 1024 || durationMs <= 0) return;
     const instantMbps = (bytes * 8) / (durationMs / 1000) / 1_000_000;
-    const clamped = Math.max(0.4, Math.min(200, instantMbps));
-    this.emaMbps = this.emaMbps * 0.45 + clamped * 0.55;
+    const clamped = Math.max(0.3, Math.min(300, instantMbps));
+    this.emaMbps = this.emaMbps * (1 - weight) + clamped * weight;
+    this.save();
     this.emit();
   }
 
   public reportStall(): void {
-    // Gently step down estimated bandwidth after a buffer stall
-    this.emaMbps = Math.max(0.8, this.emaMbps * 0.58);
+    // Step down estimated bandwidth after repeated buffer stalls
+    this.emaMbps = Math.max(0.5, this.emaMbps * 0.6);
+    this.save();
     this.emit();
   }
 
-  public reportHealthyBuffer(): void {
-    // Gently probe upward when buffer fills comfortably without stalls
-    this.emaMbps = Math.min(100, this.emaMbps * 1.18 + 0.5);
-    this.emit();
+  /**
+   * Measure real throughput by downloading the first ~1.5 MB of a media URL.
+   * Time is counted from the first received byte, so server latency is excluded.
+   * Returns the measured Mbps (also folded into the estimate), or null if too little data arrived.
+   */
+  public async probe(url: string, maxBytes = 1_500_000, timeoutMs = 6000): Promise<number | null> {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let bytes = 0;
+    let tFirst = 0;
+    try {
+      const res = await fetch(url, {
+        headers: { Range: `bytes=0-${maxBytes - 1}` },
+        signal: ctrl.signal,
+        cache: 'no-store',
+      });
+      if (!res.ok || !res.body) return null;
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!tFirst) {
+          tFirst = performance.now(); // first chunk only starts the clock
+          continue;
+        }
+        bytes += value.byteLength;
+        if (bytes >= maxBytes) {
+          ctrl.abort();
+          break;
+        }
+      }
+    } catch {
+      // timeout / abort: use whatever arrived
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!tFirst || bytes < 128 * 1024) return null;
+    const ms = Math.max(50, performance.now() - tFirst);
+    const mbps = (bytes * 8) / (ms / 1000) / 1_000_000;
+    this.recordTransfer(bytes, ms, 0.8); // a deliberate 1.5 MB probe is a strong signal
+    return mbps;
   }
 
   public getEstimatedMbps(): number {
     return this.emaMbps;
   }
 
-  public getRecommendedMaxHeight(): number {
-    const mbps = this.emaMbps;
-    const screenCap =
+  /** Highest resolution worth playing on this screen, regardless of bandwidth. */
+  public getScreenCapHeight(): number {
+    const screenPx =
       typeof window !== 'undefined' && window.screen?.height
         ? Math.max(window.screen.height * (window.devicePixelRatio || 1), 1080)
         : 2160;
+    return screenPx >= 1800 ? 2160 : screenPx >= 1200 ? 1440 : 1080;
+  }
 
+  /** Resolution cap from both the bandwidth estimate and the screen. */
+  public getRecommendedMaxHeight(): number {
+    const mbps = this.emaMbps;
     let target = 1080;
     if (mbps >= 18) target = 2160;
     else if (mbps >= 9) target = 1440;
@@ -212,7 +298,7 @@ export class BandwidthMonitor {
     else if (mbps >= 0.9) target = 480;
     else target = 360;
 
-    return Math.min(target, screenCap >= 1800 ? 2160 : screenCap >= 1200 ? 1440 : 1080);
+    return Math.min(target, this.getScreenCapHeight());
   }
 
   public subscribe(fn: (mbps: number) => void): () => void {
@@ -253,11 +339,9 @@ export async function fetchVideoStream(videoId: string): Promise<VideoStreamPayl
 
   const promise = (async (): Promise<VideoStreamPayload | null> => {
     try {
-      const t0 = performance.now();
       const res = await fetch(`/api/video/${encodeURIComponent(videoId)}`);
       if (!res.ok) return null;
       const text = await res.text();
-      bandwidthMonitor.recordTransfer(text.length, Math.max(10, performance.now() - t0));
       const data = JSON.parse(text) as VideoStreamPayload;
       streamCache.set(videoId, { data, ts: Date.now() });
       if (streamCache.size > 120) {
@@ -366,13 +450,16 @@ export function formatQualityLabel(height: number, fps?: number): string {
 export function pickBestAutoQuality(
   qualities: QualityOption[],
   maxRecommendedHeight: number,
-  canDecodeType: (mime?: string) => boolean
+  canDecodeType: (mime?: string) => boolean,
+  budgetMbps?: number
 ): QualityOption | null {
   if (qualities.length === 0) return null;
   const playable = qualities.filter((q) => !q.type || canDecodeType(q.type));
   const pool = playable.length > 0 ? playable : qualities;
-  // Choose highest resolution <= maxRecommendedHeight (so on fiber/fast net -> 1080p/1440p/2160p!)
-  const withinBudget = pool.filter((q) => q.height <= maxRecommendedHeight);
+  // Highest resolution within the screen cap whose real bitrate fits the measured bandwidth
+  const withinBudget = pool.filter(
+    (q) => q.height <= maxRecommendedHeight && (budgetMbps === undefined || mbpsNeededForQuality(q) <= budgetMbps)
+  );
   if (withinBudget.length > 0) {
     return withinBudget[0]; // sorted descending
   }

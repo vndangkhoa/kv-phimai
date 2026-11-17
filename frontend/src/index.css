@@ -3544,6 +3544,58 @@ a {
 }
 
 /* --- Stacked series card (all episodes of one movie in a single card) --- */
+/* --- Missing video backend notice (self-host setup) --- */
+.backend-setup-notice {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 16px 24px 4px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background-color: rgba(245, 158, 11, 0.1);
+  color: var(--yt-text-primary);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.backend-setup-notice-icon {
+  flex-shrink: 0;
+  color: #f59e0b;
+  margin-top: 1px;
+}
+
+.backend-setup-notice-body p {
+  margin: 4px 0 0;
+}
+
+.backend-setup-notice-en {
+  color: var(--yt-text-secondary);
+  font-size: 12.5px;
+}
+
+.backend-setup-notice code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.1);
+  font-size: 12px;
+}
+
+.backend-setup-notice a {
+  display: inline-block;
+  margin-top: 8px;
+  color: #f59e0b;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+@media (max-width: 768px) {
+  .backend-setup-notice {
+    margin: 12px 12px 4px;
+  }
+}
+
+/* --- Stacked series card (all episodes of one movie in a single card) --- */
 .yt-card-stack {
   position: relative;
 }

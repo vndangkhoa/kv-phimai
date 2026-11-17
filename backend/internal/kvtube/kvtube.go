@@ -64,7 +64,25 @@ type Service struct {
 var (
 	reQualityHeight = regexp.MustCompile(`(\d+)p`)
 	reMPDBaseURL    = regexp.MustCompile(`<BaseURL>([^<]+)</BaseURL>`)
+	// Absolute URLs on an Invidious / Companion host (any domain the backend reports
+	// for itself), captured as host + backend path so they can become same-origin.
+	reBackendAbsURL = regexp.MustCompile(`https?://([A-Za-z0-9.\-]+(?::\d+)?)(/(?:videoplayback|companion/|api/|latest_version|vi/)[^\s"<>]*)`)
 )
+
+// isBackendPath reports whether an upstream URL path belongs to Invidious / Companion.
+func isBackendPath(p string) bool {
+	for _, prefix := range []string{"/videoplayback", "/companion/", "/companion", "/api/", "/latest_version", "/vi/"} {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isGoogleVideoHost(host string) bool {
+	h := strings.ToLower(host)
+	return h == "googlevideo.com" || strings.HasSuffix(h, ".googlevideo.com")
+}
 
 func buildClients(proxyFunc func(*http.Request) (*url.URL, error)) (*http.Client, *http.Client) {
 	transport := &http.Transport{
@@ -100,19 +118,12 @@ func buildClients(proxyFunc func(*http.Request) (*url.URL, error)) (*http.Client
 	return apiClient, streamClient
 }
 
-func NewService(baseURL string, upstreamRoots ...string) *Service {
-	cleaned := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if cleaned == "" {
-		cleaned = "https://u.khoavo.vndns.net"
-	}
-
-	upstream := ""
-	if len(upstreamRoots) > 0 {
-		upstream = strings.TrimRight(strings.TrimSpace(upstreamRoots[0]), "/")
-	}
-	if upstream == "" {
-		upstream = cleaned + "/api/invidious"
-	}
+// NewService builds the video engine. companionBase is the host that serves
+// /companion/... (Invidious Companion); upstream is the Invidious API root.
+// Both may be empty when the operator has not configured a backend yet.
+func NewService(companionBase string, upstream string) *Service {
+	cleaned := strings.TrimRight(strings.TrimSpace(companionBase), "/")
+	upstream = strings.TrimRight(strings.TrimSpace(upstream), "/")
 
 	apiClient, streamClient := buildClients(http.ProxyFromEnvironment)
 
@@ -143,6 +154,26 @@ func NewService(baseURL string, upstreamRoots ...string) *Service {
 		thumbCache:       make(map[string]cachedBytes),
 		inflight:         make(map[string]*inflightCall),
 	}
+}
+
+// IsConfigured reports whether a video backend (Invidious API) has been set.
+func (s *Service) IsConfigured() bool {
+	return s.UpstreamRoot != ""
+}
+
+// isUpstreamHost reports whether host belongs to the configured Invidious /
+// Companion backend (so its absolute URLs can be rewritten to same-origin paths).
+func (s *Service) isUpstreamHost(host string) bool {
+	host = strings.ToLower(host)
+	if host == "" {
+		return false
+	}
+	for _, base := range []string{s.BaseURL, s.UpstreamRoot} {
+		if u, err := url.Parse(base); err == nil && strings.EqualFold(u.Host, host) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsWarpActive checks whether the local userspace Cloudflare WARP HTTP proxy (usque) is reachable.
@@ -292,12 +323,12 @@ func (s *Service) RewriteStreamURLToSameOrigin(raw string) string {
 		return "/api/invidious/companion" + pathAndQuery
 	}
 
-	// Any Invidious/Companion domain (yt.khoavo.vndns.net, u.khoavo.vndns.net, companion:8282, invidious:3000, etc.)
+	// Any Invidious/Companion host (the configured backend, companion:8282, invidious:3000, etc.)
 	if strings.HasPrefix(u.Path, "/api/") ||
 		strings.HasPrefix(u.Path, "/companion/") ||
 		u.Path == "/companion" ||
 		strings.HasPrefix(u.Path, "/latest_version") ||
-		strings.Contains(host, "khoavo.") ||
+		s.isUpstreamHost(u.Host) ||
 		host == "companion" ||
 		host == "invidious" ||
 		host == "localhost" ||
@@ -328,7 +359,7 @@ func (s *Service) buildUpstreamTarget(subPath string, rawQuery string) string {
 		cleanSub = "/" + cleanSub
 	}
 
-	// Preserve /companion/* and route /videoplayback* to Companion endpoint on u.khoavo.vndns.net
+	// Preserve /companion/* and route /videoplayback* to the Companion host
 	// because /companion/videoplayback responds fast over WARP whereas /api/invidious/videoplayback stalls.
 	var target string
 	if strings.HasPrefix(cleanSub, "/companion/") || cleanSub == "/companion" {
@@ -401,10 +432,23 @@ func (s *Service) rewriteVideoPayloadMap(raw map[string]interface{}, videoID str
 
 func (s *Service) rewriteMPDManifest(xmlBytes []byte) []byte {
 	text := string(xmlBytes)
-	text = strings.ReplaceAll(text, "https://yt.khoavo.vndns.net/videoplayback", "/api/invidious/companion/videoplayback")
-	text = strings.ReplaceAll(text, "https://yt.khoavo.vndns.net/", "/api/invidious/")
-	text = strings.ReplaceAll(text, "https://u.khoavo.vndns.net/api/invidious/", "/api/invidious/")
-	text = strings.ReplaceAll(text, "https://ut.khoavo.myds.me/api/invidious/", "/api/invidious/")
+	// Absolute URLs on the Invidious / Companion host (whatever public domain the
+	// backend reports) become same-origin paths. googlevideo URLs are handled below.
+	text = reBackendAbsURL.ReplaceAllStringFunc(text, func(match string) string {
+		m := reBackendAbsURL.FindStringSubmatch(match)
+		host, path := m[1], m[2]
+		if isGoogleVideoHost(host) {
+			return match
+		}
+		switch {
+		case strings.HasPrefix(path, "/api/invidious/"):
+			return path
+		case strings.HasPrefix(path, "/videoplayback"):
+			return "/api/invidious/companion" + path
+		default:
+			return "/api/invidious" + path
+		}
+	})
 
 	// Rewrite <BaseURL>/companion/...</BaseURL> or <BaseURL>/videoplayback...</BaseURL> preserving /companion/
 	text = reMPDBaseURL.ReplaceAllStringFunc(text, func(match string) string {
@@ -620,12 +664,9 @@ func (s *Service) ProxyInvidious(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(loc, "/") {
 				trimmedLoc := strings.TrimPrefix(loc, "/api/invidious")
 				currentURL = s.buildUpstreamTarget(trimmedLoc, "")
-			} else if strings.Contains(loc, "yt.khoavo.vndns.net") || strings.Contains(loc, "u.khoavo.vndns.net") {
-				if parsedLoc, perr := url.Parse(loc); perr == nil {
-					currentURL = s.buildUpstreamTarget(parsedLoc.Path, parsedLoc.RawQuery)
-				} else {
-					currentURL = loc
-				}
+			} else if parsedLoc, perr := url.Parse(loc); perr == nil && !isGoogleVideoHost(parsedLoc.Host) &&
+				(s.isUpstreamHost(parsedLoc.Host) || isBackendPath(parsedLoc.Path)) {
+				currentURL = s.buildUpstreamTarget(parsedLoc.Path, parsedLoc.RawQuery)
 			} else {
 				currentURL = loc
 			}

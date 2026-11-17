@@ -1,9 +1,7 @@
 services:
   kv-phimai:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: vndangkhoa/kv-phimai:latest
+    # build: .            # uncomment to build from source instead of pulling
     container_name: kv-phimai
     platform: linux/amd64
     ports:
@@ -12,10 +10,15 @@ services:
       - PORT=8090
       - DATA_DIR=/app/data
       - DATABASE_URL=/app/data/phimai.db
-      - KVTUBE_URL=https://u.khoavo.vndns.net
       - TZ=Asia/Ho_Chi_Minh
+      # REQUIRED: your video backend (PhimAI does not include one). Pick ONE option:
+      #  Option A — KV-Tube (https://github.com/vndangkhoa/kv-tube):
+      - KVTUBE_URL=${KVTUBE_URL:-}
+      #  Option B — plain Invidious + Invidious Companion:
+      # - INVIDIOUS_UPSTREAM=https://invidious.example.com
+      # - COMPANION_URL=https://invidious.example.com   # host that serves /companion/...
     volumes:
-      - ./backend/data:/app/data
+      - ./data:/app/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8090/api/health"]

@@ -56,6 +56,28 @@ interface MaterialiousPlayerProps {
   externalSeekSec?: { sec: number; nonce: number } | null;
 }
 
+/** Same-origin URL that plays quality option `q` directly in a <video>. */
+function qualityStreamUrl(q: QualityOption, videoId: string): string {
+  if (q.url) return proxySameOriginUrl(q.url);
+  const itag = q.itag || '18';
+  return `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=${encodeURIComponent(itag)}&local=true`;
+}
+
+/** Seconds of media buffered ahead of the playhead. */
+function bufferedAhead(vid: HTMLVideoElement): number {
+  const cur = vid.currentTime;
+  for (let i = 0; i < vid.buffered.length; i++) {
+    if (vid.buffered.start(i) <= cur && cur <= vid.buffered.end(i)) return vid.buffered.end(i) - cur;
+  }
+  return 0;
+}
+
+// Direct-stream auto upgrade: how often to check, and minimum gaps between probes / switches.
+const UPGRADE_CHECK_MS = 5_000;
+const UPGRADE_PROBE_GAP_MS = 45_000;
+const UPGRADE_SWITCH_GAP_MS = 12_000;
+const UPGRADE_STALL_QUIET_MS = 45_000;
+
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
   const h = Math.floor(seconds / 3600);
@@ -98,6 +120,9 @@ export function MaterialiousPlayer({
   const lastLoadedVideoIdRef = useRef<string>('');
   const startupWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seekRippleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const qualityToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastQualitySwitchRef = useRef<number>(0);
+  const lastProbeAtRef = useRef<number>(0);
   const timelineRef = useRef<HTMLDivElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -153,6 +178,13 @@ export function MaterialiousPlayer({
   const [currentCaption, setCurrentCaption] = useState<string>('off');
   const [activeCaptionUrl, setActiveCaptionUrl] = useState<string | null>(null);
   const [seekRipple, setSeekRipple] = useState<{ side: 'left' | 'right'; text: string } | null>(null);
+  const [qualityToast, setQualityToast] = useState<string | null>(null);
+
+  const showQualityToast = useCallback((text: string) => {
+    setQualityToast(text);
+    if (qualityToastTimerRef.current) clearTimeout(qualityToastTimerRef.current);
+    qualityToastTimerRef.current = setTimeout(() => setQualityToast(null), 3000);
+  }, []);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useMediaSession({
@@ -203,14 +235,9 @@ export function MaterialiousPlayer({
         ? proxySameOriginUrl(vData.bestAudioUrl)
         : `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=140&local=true`;
 
-      let streamSrc = q.url ? proxySameOriginUrl(q.url) : '';
-      if (!streamSrc && q.itag) {
-        streamSrc = `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=${encodeURIComponent(q.itag)}&local=true`;
-      }
-      if (!streamSrc) {
-        streamSrc = `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`;
-      }
+      const streamSrc = qualityStreamUrl(q, videoId);
 
+      lastQualitySwitchRef.current = Date.now();
       usingProgressiveRef.current = true;
       setActiveHeight(q.height || 360);
       setIsBuffering(true);
@@ -321,6 +348,7 @@ export function MaterialiousPlayer({
     setPreviewHasFrame(false);
     setScrubTime(null);
     setIsScrubbing(false);
+    lastProbeAtRef.current = 0;
     pendingPreviewTimeRef.current = null;
     lastScrubTimeRef.current = null;
     setCurrentTime(getSavedPosition(videoId));
@@ -382,8 +410,13 @@ export function MaterialiousPlayer({
         };
 
         // Determine target initial resolution from measured bandwidth (defaults up to 1080p/1440p/2160p on fast internet!)
-        const recommendedMax = bandwidthMonitor.getRecommendedMaxHeight();
-        const bestInitial = pickBestAutoQuality(qualList, recommendedMax, canDecodeType);
+        const recommendedMax = bandwidthMonitor.getScreenCapHeight();
+        const bestInitial = pickBestAutoQuality(
+          qualList,
+          recommendedMax,
+          canDecodeType,
+          bandwidthMonitor.getEstimatedMbps()
+        );
 
         // 1. Try Shaka Player DASH/HLS ABR first for true dynamic bandwidth switching up to 4K
         const dashManifest = videoData.dashUrl ? proxySameOriginUrl(videoData.dashUrl) : '';
@@ -417,7 +450,8 @@ export function MaterialiousPlayer({
                 }
               });
 
-              const estBps = Math.max(25_000_000, Math.round(bandwidthMonitor.getEstimatedMbps() * 1_000_000));
+              // Start Shaka's ABR from the measured (persisted) bandwidth; it then adapts up/down per segment.
+              const estBps = Math.max(1_500_000, Math.round(bandwidthMonitor.getEstimatedMbps() * 1_000_000));
               player.configure({
                 abr: {
                   enabled: true,
@@ -723,15 +757,11 @@ export function MaterialiousPlayer({
         }
       }
 
-      // Buffered bar update + upward bandwidth signal when buffer grows well ahead
+      // Buffered bar update
       if (vid.buffered.length > 0) {
         for (let i = 0; i < vid.buffered.length; i++) {
           if (vid.buffered.start(i) <= cur && cur <= vid.buffered.end(i)) {
-            const bufEnd = vid.buffered.end(i);
-            setBuffered(bufEnd);
-            if (bufEnd - cur > 18) {
-              bandwidthMonitor.reportHealthyBuffer();
-            }
+            setBuffered(vid.buffered.end(i));
             break;
           }
         }
@@ -763,6 +793,7 @@ export function MaterialiousPlayer({
             qualities.find((q) => q.height < activeHeight && q.height >= 360);
           if (lower) {
             attachDirectQuality(lower, vid.currentTime);
+            showQualityToast(`↓ Giảm xuống ${lower.height}p do mạng chậm`);
           }
         }
       }
@@ -866,7 +897,59 @@ export function MaterialiousPlayer({
     qualities,
     activeHeight,
     attachDirectQuality,
+    showQualityToast,
   ]);
+
+  // Auto-raise resolution on direct (non-DASH) streams: while playback is smooth, measure real
+  // throughput with a short download probe and switch up as soon as a higher quality fits.
+  // (DASH via Shaka already adapts up and down by itself per segment.)
+  useEffect(() => {
+    if (compact || qualityMode !== 'auto' || !isPlaying || qualities.length < 2) return;
+    let cancelled = false;
+    let busy = false;
+
+    const canDecode = (mime?: string) => !mime || videoRef.current?.canPlayType(mime) !== '';
+
+    const check = async () => {
+      const vid = videoRef.current;
+      if (cancelled || busy || !vid || vid.paused) return;
+      if (shakaPlayerRef.current || !usingProgressiveRef.current || !playbackStartedRef.current) return;
+
+      const now = Date.now();
+      if (now - lastQualitySwitchRef.current < UPGRADE_SWITCH_GAP_MS) return;
+      if (now - lastProbeAtRef.current < UPGRADE_PROBE_GAP_MS) return;
+      if (stallTimestampsRef.current.some((t) => now - t < UPGRADE_STALL_QUIET_MS)) return;
+      if (bufferedAhead(vid) < 8) return;
+
+      // Best quality the screen allows (bandwidth is checked after probing); nothing to do if already there.
+      const cap = bandwidthMonitor.getScreenCapHeight();
+      const top = pickBestAutoQuality(qualities, cap, canDecode);
+      if (!top || top.height <= activeHeight) return;
+
+      busy = true;
+      lastProbeAtRef.current = now;
+      try {
+        await bandwidthMonitor.probe(qualityStreamUrl(top, videoId));
+        if (cancelled) return;
+        const target = pickBestAutoQuality(qualities, cap, canDecode, bandwidthMonitor.getEstimatedMbps());
+        const cur = videoRef.current;
+        if (target && cur && target.height > activeHeight) {
+          attachDirectQuality(target, cur.currentTime);
+          showQualityToast(
+            `↑ Tự động nâng lên ${target.height}p (~${Math.round(bandwidthMonitor.getEstimatedMbps())} Mbps)`
+          );
+        }
+      } finally {
+        busy = false;
+      }
+    };
+
+    const timer = setInterval(() => void check(), UPGRADE_CHECK_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [compact, qualityMode, isPlaying, qualities, activeHeight, videoId, attachDirectQuality, showQualityToast]);
 
   // Controls auto-hide
   const resetControlsTimer = useCallback(
@@ -941,7 +1024,12 @@ export function MaterialiousPlayer({
           }
         }
         const canDecode = (mime?: string) => !mime || videoRef.current?.canPlayType(mime) !== '';
-        const best = pickBestAutoQuality(qualities, bandwidthMonitor.getRecommendedMaxHeight(), canDecode);
+        const best = pickBestAutoQuality(
+          qualities,
+          bandwidthMonitor.getScreenCapHeight(),
+          canDecode,
+          bandwidthMonitor.getEstimatedMbps()
+        );
         if (best) attachDirectQuality(best, videoRef.current?.currentTime);
         return;
       }
@@ -1612,6 +1700,30 @@ export function MaterialiousPlayer({
               }}
             >
               {seekRipple.text}
+            </div>
+          )}
+
+          {qualityToast && (
+            <div
+              data-testid="quality-toast"
+              style={{
+                position: 'absolute',
+                top: '12px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                padding: '6px 12px',
+                borderRadius: '16px',
+                backgroundColor: 'rgba(0,0,0,0.78)',
+                backdropFilter: 'blur(4px)',
+                color: '#fff',
+                fontSize: '12.5px',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                zIndex: 25,
+                pointerEvents: 'none',
+              }}
+            >
+              {qualityToast}
             </div>
           )}
 

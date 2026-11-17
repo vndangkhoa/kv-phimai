@@ -5,7 +5,8 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 export PORT="${PORT:-8090}"
-export KVTUBE_URL="${KVTUBE_URL:-https://u.khoavo.vndns.net}"
+# Video backend (required for playback): your KV-Tube URL, or set INVIDIOUS_UPSTREAM + COMPANION_URL.
+export KVTUBE_URL="${KVTUBE_URL:-}"
 
 PIDS=()
 cleanup() {
@@ -35,7 +36,7 @@ build_frontend() {
 case "$CMD" in
   serve|backend)
     build_backend
-    echo "[KV-PhimAI] Starting server on http://localhost:${PORT} (KV-Tube: ${KVTUBE_URL})..."
+    echo "[KV-PhimAI] Starting server on http://localhost:${PORT} (video backend: ${KVTUBE_URL:-${INVIDIOUS_UPSTREAM:-NOT SET}})..."
     cd "$BACKEND_DIR" && exec ./server
     ;;
   build)
