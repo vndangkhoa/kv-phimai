@@ -4,21 +4,19 @@ import {
   IoHomeOutline,
   IoFlame,
   IoFlameOutline,
-  IoFilm,
-  IoFilmOutline,
   IoBookmark,
   IoBookmarkOutline,
-  IoSparklesOutline,
+  IoTime,
+  IoTimeOutline,
 } from 'react-icons/io5';
 
 interface MobileNavProps {
-  activeView: 'home' | 'watch' | 'shorts';
+  activeView: 'home' | 'watch';
   activeSort: string;
   onSelectHome: () => void;
   onSelectHot: () => void;
-  onSelectShorts: () => void;
   onSelectSaved: () => void;
-  onOpenAssistant: () => void;
+  onSelectHistory: () => void;
 }
 
 export function MobileNav({
@@ -26,16 +24,15 @@ export function MobileNav({
   activeSort,
   onSelectHome,
   onSelectHot,
-  onSelectShorts,
   onSelectSaved,
-  onOpenAssistant,
+  onSelectHistory,
 }: MobileNavProps) {
   if (activeView === 'watch') return null;
 
-  const isHome = activeView === 'home' && activeSort !== 'hot' && activeSort !== 'saved';
+  const isHome = activeView === 'home' && activeSort !== 'hot' && activeSort !== 'saved' && activeSort !== 'history';
   const isHot = activeView === 'home' && activeSort === 'hot';
-  const isShorts = activeView === 'shorts';
   const isSaved = activeView === 'home' && activeSort === 'saved';
+  const isHistory = activeView === 'home' && activeSort === 'history';
 
   const tabs = [
     {
@@ -53,13 +50,6 @@ export function MobileNav({
       icon: isHot ? <IoFlame size={20} /> : <IoFlameOutline size={20} />,
     },
     {
-      id: 'shorts',
-      label: 'Shorts',
-      active: isShorts,
-      onClick: onSelectShorts,
-      icon: isShorts ? <IoFilm size={20} /> : <IoFilmOutline size={20} />,
-    },
-    {
       id: 'saved',
       label: 'Đã lưu',
       active: isSaved,
@@ -67,11 +57,11 @@ export function MobileNav({
       icon: isSaved ? <IoBookmark size={20} /> : <IoBookmarkOutline size={20} />,
     },
     {
-      id: 'ask',
-      label: 'Trợ lý AI',
-      active: false,
-      onClick: onOpenAssistant,
-      icon: <IoSparklesOutline size={20} />,
+      id: 'history',
+      label: 'Lịch sử',
+      active: isHistory,
+      onClick: onSelectHistory,
+      icon: isHistory ? <IoTime size={20} /> : <IoTimeOutline size={20} />,
     },
   ];
 

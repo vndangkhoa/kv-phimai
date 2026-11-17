@@ -6,7 +6,6 @@ import {
   IoBookmarkOutline,
   IoShareSocialOutline,
   IoExpandOutline,
-  IoPeopleOutline,
   IoCheckmarkCircle,
   IoTimeOutline,
   IoSendOutline,
@@ -40,7 +39,6 @@ interface WatchPageProps {
   onSelectFilm: (film: Film) => void;
   onBackHome: () => void;
   onFilterByPatch: (patch: Partial<FilterState>) => void;
-  onOpenWatchParty: (film: Film) => void;
   onSeekToSec: (sec: number) => void;
   onRateSuccess: (id: string, rating: { s: number; n: number }) => void;
 }
@@ -55,7 +53,6 @@ export function WatchPage({
   onSelectFilm,
   onBackHome,
   onFilterByPatch,
-  onOpenWatchParty,
   onSeekToSec,
   onRateSuccess,
 }: WatchPageProps) {
@@ -441,15 +438,6 @@ export function WatchPage({
               >
                 {saved ? <IoBookmark size={17} color="#ff0033" /> : <IoBookmarkOutline size={17} />}
                 <span>{saved ? 'Đã lưu' : 'Xem sau'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onOpenWatchParty(film)}
-                className="watch-action-pill"
-              >
-                <IoPeopleOutline size={17} />
-                <span>Xem chung</span>
               </button>
 
               {!isMobile && (

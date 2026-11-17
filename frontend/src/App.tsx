@@ -7,9 +7,6 @@ import { MobileNav } from './components/MobileNav';
 import { VideoCard } from './components/VideoCard';
 import { WatchPage } from './components/WatchPage';
 import { PersistentPlayer } from './components/PersistentPlayer';
-import { SwipeFeedModal } from './components/SwipeFeedModal';
-import { AskAssistantModal } from './components/AskAssistantModal';
-import { WatchPartyModal } from './components/WatchPartyModal';
 import {
   CAT_LABEL,
   GENRE_GROUPS,
@@ -69,7 +66,7 @@ const FALLBACK_SEED_FILMS: Film[] = [
   },
 ];
 
-function parseRouteFromLocation(): { view: 'home' | 'watch' | 'shorts'; videoId: string; t: number; channel: string; query: string } {
+function parseRouteFromLocation(): { view: 'home' | 'watch'; videoId: string; t: number; channel: string; query: string } {
   const path = window.location.pathname || '/';
   const params = new URLSearchParams(window.location.search || '');
   const v = params.get('v') || '';
@@ -79,9 +76,6 @@ function parseRouteFromLocation(): { view: 'home' | 'watch' | 'shorts'; videoId:
 
   if (path === '/watch' && v) {
     return { view: 'watch', videoId: v, t, channel: '', query: '' };
-  }
-  if (path === '/shorts') {
-    return { view: 'shorts', videoId: v, t: 0, channel: '', query: '' };
   }
   return { view: 'home', videoId: '', t: 0, channel, query };
 }
@@ -98,9 +92,7 @@ export function App() {
     query: initialRoute.query,
   }));
 
-  const [routeView, setRouteView] = useState<'home' | 'watch' | 'shorts'>(
-    initialRoute.view === 'shorts' ? 'home' : initialRoute.view
-  );
+  const [routeView, setRouteView] = useState<'home' | 'watch'>(initialRoute.view);
   const [watchVideoId, setWatchVideoId] = useState<string>(initialRoute.videoId);
   const [watchInitialTime, setWatchInitialTime] = useState<number>(initialRoute.t);
   const [activeFilm, setActiveFilm] = useState<Film | null>(() => {
@@ -135,13 +127,6 @@ export function App() {
   const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth <= 768 : false
   );
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    try {
-      return localStorage.getItem('phimai_theme') === 'light' ? 'light' : 'dark';
-    } catch {
-      return 'dark';
-    }
-  });
 
   // Catalog metadata
   const [manifestCategories, setManifestCategories] = useState<Record<string, number>>({});
@@ -167,33 +152,13 @@ export function App() {
     }
   });
 
-  // Secondary tool modals (Shorts, AI Assistant, Watch Party)
-  const [swipeOpen, setSwipeOpen] = useState<boolean>(initialRoute.view === 'shorts');
-  const [askOpen, setAskOpen] = useState<boolean>(false);
-  const [watchPartyOpen, setWatchPartyOpen] = useState<boolean>(false);
-  const [watchPartyFilm, setWatchPartyFilm] = useState<Film | null>(null);
-  const [partyCode, setPartyCode] = useState<string | null>(() => {
-    try {
-      const r = new URLSearchParams(window.location.search).get('room');
-      return r ? r.toUpperCase() : null;
-    } catch {
-      return null;
-    }
-  });
-  const [isPartyHost, setIsPartyHost] = useState(false);
-
   const chipBarRef = useRef<HTMLDivElement>(null);
   const loadMoreTriggerRef = useRef<HTMLDivElement>(null);
 
-  // Apply theme
+  // Lock dark Materialious theme cleanly
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    try {
-      localStorage.setItem('phimai_theme', theme);
-    } catch {
-      // ignore
-    }
-  }, [theme]);
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }, []);
 
   // Sleep timer shutdown
   useEffect(() => {
@@ -241,10 +206,7 @@ export function App() {
     });
   }, []);
 
-  // Fast staged boot:
-  // 1) Initial 48 films + manifest load immediately in parallel
-  // 2) Pre-fetch top 4 stream manifests in background
-  // 3) Full 9,220-film index hydrates silently right after
+  // Fast staged boot
   useEffect(() => {
     let cancelled = false;
     async function boot() {
@@ -267,7 +229,6 @@ export function App() {
         if (!cancelled) setLoading(false);
       }
 
-      // Secondary metadata
       Promise.allSettled([
         fetch('/api/stats').then((r) => (r.ok ? r.json() : null)),
         fetch('/api/hot').then((r) => (r.ok ? r.json() : null)),
@@ -280,7 +241,6 @@ export function App() {
         if (rt.status === 'fulfilled' && rt.value?.ratings) setRatings(rt.value.ratings);
       });
 
-      // Full catalog background hydration
       try {
         const fullRes = await fetch('/api/films?limit=10000&page=1');
         if (fullRes.ok) {
@@ -300,7 +260,7 @@ export function App() {
     };
   }, [mergeFilmsIntoCatalog]);
 
-  // Sync activeFilm once catalog finishes hydrating for direct `/watch?v=...` entry
+  // Sync activeFilm for direct `/watch?v=...` entry
   useEffect(() => {
     if (!watchVideoId) return;
     const match = allFilms.find((f) => f.id === watchVideoId);
@@ -321,17 +281,12 @@ export function App() {
     const onPopState = () => {
       const parsed = parseRouteFromLocation();
       if (parsed.view === 'watch' && parsed.videoId) {
-        setSwipeOpen(false);
         setRouteView('watch');
         setWatchVideoId(parsed.videoId);
         setWatchInitialTime(parsed.t);
         const found = allFilms.find((f) => f.id === parsed.videoId);
         if (found) setActiveFilm(found);
-      } else if (parsed.view === 'shorts') {
-        setRouteView('home');
-        setSwipeOpen(true);
       } else {
-        setSwipeOpen(false);
         setRouteView('home');
       }
     };
@@ -356,10 +311,8 @@ export function App() {
     });
   }, []);
 
-  // Open a film on the dedicated /watch?v=<id> page (0ms shallow pushState + optimistic metadata!)
   const handleOpenWatch = useCallback(
     (film: Film, seekSec = 0) => {
-      setSwipeOpen(false);
       setIsSidebarOpen(false);
       setActiveFilm(film);
       setWatchVideoId(film.id);
@@ -377,7 +330,6 @@ export function App() {
   );
 
   const handleGoHome = useCallback(() => {
-    setSwipeOpen(false);
     setRouteView('home');
     setIsSidebarOpen(window.innerWidth > 1024);
     if (window.location.pathname !== '/') {
@@ -400,7 +352,6 @@ export function App() {
     });
   }, []);
 
-  // Filter & sort visible films
   const filteredFilms = useMemo(() => {
     const q = filters.query.trim().toLowerCase();
     let list = allFilms.filter((f) => {
@@ -435,7 +386,6 @@ export function App() {
   const visibleFilms = useMemo(() => filteredFilms.slice(0, shownCount), [filteredFilms, shownCount]);
   const hasMore = shownCount < filteredFilms.length;
 
-  // Infinite scroll on homepage grid
   useEffect(() => {
     if (routeView !== 'home' || !hasMore) return;
     const el = loadMoreTriggerRef.current;
@@ -459,7 +409,6 @@ export function App() {
     return out;
   }, [manifestCategories, allFilms]);
 
-  // Quick filter chips for kv-tube .yt-chip-bar
   const quickChips = [
     { id: 'all', label: 'Tất cả', active: filters.cat === 'all' && filters.genre === 'all' && filters.sort !== 'hot' && !filters.fullOnly && !filters.channel },
     { id: 'hot', label: 'Đang thịnh hành', active: filters.sort === 'hot' },
@@ -493,7 +442,6 @@ export function App() {
     }
   };
 
-  // Determine next/prev film for watch page playback controls
   const currentFilmIndex = useMemo(
     () => (activeFilm ? filteredFilms.findIndex((f) => f.id === activeFilm.id) : -1),
     [activeFilm, filteredFilms]
@@ -515,7 +463,6 @@ export function App() {
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: 'var(--yt-background)', color: 'var(--yt-text-primary)' }}>
-      {/* Top Sticky Materialious Header */}
       <Header
         query={filters.query}
         onQueryChange={(q) => {
@@ -531,20 +478,11 @@ export function App() {
           setFilters(DEFAULT_FILTERS);
           handleGoHome();
         }}
-        onOpenShorts={() => setSwipeOpen(true)}
-        onOpenAssistant={() => setAskOpen(true)}
-        onOpenWatchParty={() => {
-          setWatchPartyFilm(activeFilm || filteredFilms[0] || allFilms[0] || null);
-          setWatchPartyOpen(true);
-        }}
-        theme={theme}
-        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         allFilms={allFilms}
         onSelectFilm={(f) => handleOpenWatch(f)}
         onlineCount={onlineCount}
       />
 
-      {/* Collapsible Sidebar (Desktop rail or Overlay drawer) */}
       <Sidebar
         isOpen={isSidebarOpen}
         isOverlayMode={isWatchMode || isMobileViewport}
@@ -553,15 +491,8 @@ export function App() {
         categories={categories}
         onSelectFilter={(patch) => setFilters(patch)}
         onGoHome={handleGoHome}
-        onOpenShorts={() => setSwipeOpen(true)}
-        onOpenAssistant={() => setAskOpen(true)}
-        onOpenWatchParty={() => {
-          setWatchPartyFilm(activeFilm || filteredFilms[0] || allFilms[0] || null);
-          setWatchPartyOpen(true);
-        }}
       />
 
-      {/* Main Content Area */}
       <main
         className={`yt-main-content ${
           isWatchMode
@@ -585,16 +516,11 @@ export function App() {
               setFilters(patch);
               handleGoHome();
             }}
-            onOpenWatchParty={(f) => {
-              setWatchPartyFilm(f);
-              setWatchPartyOpen(true);
-            }}
             onSeekToSec={(sec) => setExternalSeekSec({ sec, nonce: Date.now() })}
             onRateSuccess={(id, nextRating) => setRatings((prev) => ({ ...prev, [id]: nextRating }))}
           />
         ) : (
           <div className="yt-home-grid-wrapper">
-            {/* Sticky Category / Genre Chip Bar */}
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: '18px', position: 'relative' }}>
               <div ref={chipBarRef} className="yt-chip-bar" style={{ flex: 1 }}>
                 {quickChips.map((chip) => (
@@ -641,7 +567,6 @@ export function App() {
               </button>
             </div>
 
-            {/* Active Result Summary */}
             {(filters.query || filters.channel || filters.sort === 'saved' || filters.sort === 'history') && (
               <div style={{ marginBottom: '14px', fontSize: '13.5px', color: 'var(--yt-text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span>
@@ -659,7 +584,6 @@ export function App() {
               </div>
             )}
 
-            {/* Video Card Grid */}
             {loading && visibleFilms.length === 0 ? (
               <div className="yt-home-video-grid">
                 {Array.from({ length: 12 }).map((_, i) => (
@@ -709,9 +633,8 @@ export function App() {
         )}
       </main>
 
-      {/* Mobile Bottom Navigation */}
       <MobileNav
-        activeView={swipeOpen ? 'shorts' : isWatchMode ? 'watch' : 'home'}
+        activeView={isWatchMode ? 'watch' : 'home'}
         activeSort={filters.sort}
         onSelectHome={() => {
           setFilters(DEFAULT_FILTERS);
@@ -721,15 +644,16 @@ export function App() {
           setFilters({ sort: 'hot' });
           handleGoHome();
         }}
-        onSelectShorts={() => setSwipeOpen(true)}
         onSelectSaved={() => {
           setFilters({ sort: 'saved' });
           handleGoHome();
         }}
-        onOpenAssistant={() => setAskOpen(true)}
+        onSelectHistory={() => {
+          setFilters({ sort: 'history' });
+          handleGoHome();
+        }}
       />
 
-      {/* Persistent Player: mounts inside #watch-player-slot on /watch or docks as mini-player on / */}
       <PersistentPlayer
         activeFilm={activeFilm}
         isWatchPage={isWatchMode}
@@ -746,48 +670,6 @@ export function App() {
           setWatchVideoId('');
         }}
         externalSeekSec={externalSeekSec}
-      />
-
-      {/* Shorts Vertical Swipe Feed */}
-      <SwipeFeedModal
-        isOpen={swipeOpen}
-        startFilm={activeFilm || filteredFilms[0] || allFilms[0] || null}
-        films={filteredFilms.length > 0 ? filteredFilms : allFilms}
-        savedIds={savedIds}
-        onToggleSave={toggleSave}
-        onOpenFullPlayer={(f) => handleOpenWatch(f)}
-        onClose={() => setSwipeOpen(false)}
-      />
-
-      {/* AI Film Assistant */}
-      <AskAssistantModal
-        isOpen={askOpen}
-        films={allFilms}
-        onOpenFilm={(f) => handleOpenWatch(f)}
-        onApplyFilters={(patch) => {
-          setFilters(patch);
-          handleGoHome();
-        }}
-        onClose={() => setAskOpen(false)}
-      />
-
-      {/* Watch Party & TV Pair */}
-      <WatchPartyModal
-        isOpen={watchPartyOpen}
-        activeFilm={watchPartyFilm || activeFilm}
-        films={allFilms}
-        partyCode={partyCode}
-        isHost={isPartyHost}
-        onSetPartyState={(code, host, filmId) => {
-          setPartyCode(code);
-          setIsPartyHost(host);
-          if (filmId) {
-            const match = allFilms.find((f) => f.id === filmId);
-            if (match) handleOpenWatch(match);
-          }
-        }}
-        onOpenFilm={(f) => handleOpenWatch(f)}
-        onClose={() => setWatchPartyOpen(false)}
       />
     </div>
   );

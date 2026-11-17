@@ -3,11 +3,6 @@ import {
   IoMenuOutline,
   IoSearchOutline,
   IoCloseOutline,
-  IoSparklesOutline,
-  IoPeopleOutline,
-  IoMoonOutline,
-  IoSunnyOutline,
-  IoFilmOutline,
   IoArrowBack,
 } from 'react-icons/io5';
 import type { Film } from '../types/phimai';
@@ -18,11 +13,6 @@ interface HeaderProps {
   onSubmitSearch: (q: string) => void;
   onToggleSidebar: () => void;
   onGoHome: () => void;
-  onOpenShorts: () => void;
-  onOpenAssistant: () => void;
-  onOpenWatchParty: () => void;
-  theme: 'dark' | 'light';
-  onToggleTheme: () => void;
   allFilms: Film[];
   onSelectFilm: (film: Film) => void;
   onlineCount: number;
@@ -34,11 +24,6 @@ export function Header({
   onSubmitSearch,
   onToggleSidebar,
   onGoHome,
-  onOpenShorts,
-  onOpenAssistant,
-  onOpenWatchParty,
-  theme,
-  onToggleTheme,
   allFilms,
   onSelectFilm,
   onlineCount,
@@ -220,7 +205,7 @@ export function Header({
             )}
           </div>
 
-          {/* Right: Mobile Search + Shorts + Assistant + Watch Party + Theme */}
+          {/* Right: Mobile Search only */}
           <div className="yt-header-right">
             <button
               type="button"
@@ -229,46 +214,6 @@ export function Header({
               aria-label="Tìm kiếm"
             >
               <IoSearchOutline size={22} />
-            </button>
-
-            <button
-              type="button"
-              onClick={onOpenAssistant}
-              className="yt-create-pill-btn hidden-mobile"
-              style={{ gap: '6px' }}
-              title="Trợ lý gợi ý phim AI"
-            >
-              <IoSparklesOutline size={17} />
-              <span>Trợ lý AI</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onOpenShorts}
-              className="yt-create-pill-btn hidden-mobile"
-              style={{ gap: '6px' }}
-              title="Lướt phim ngắn Shorts"
-            >
-              <IoFilmOutline size={17} />
-              <span>Shorts</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onOpenWatchParty}
-              className="yt-icon-btn"
-              title="Phòng xem chung"
-            >
-              <IoPeopleOutline size={21} />
-            </button>
-
-            <button
-              type="button"
-              onClick={onToggleTheme}
-              className="yt-icon-btn"
-              title={theme === 'dark' ? 'Giao diện sáng' : 'Giao diện tối'}
-            >
-              {theme === 'dark' ? <IoSunnyOutline size={20} /> : <IoMoonOutline size={20} />}
             </button>
           </div>
         </>

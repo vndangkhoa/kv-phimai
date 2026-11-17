@@ -3,10 +3,7 @@ import {
   IoHomeOutline,
   IoFlameOutline,
   IoTimeOutline,
-  IoFilmOutline,
   IoBookmarkOutline,
-  IoSparklesOutline,
-  IoPeopleOutline,
   IoCheckmarkDoneCircleOutline,
   IoMenuOutline,
   IoCompassOutline,
@@ -23,9 +20,6 @@ interface SidebarProps {
   categories: Record<string, number>;
   onSelectFilter: (patch: Partial<FilterState>) => void;
   onGoHome: () => void;
-  onOpenShorts: () => void;
-  onOpenAssistant: () => void;
-  onOpenWatchParty: () => void;
 }
 
 const CAT_ORDER = ['all', 'trung', 'hoathinh', 'fantasy', 'scifi', 'kinhdi', 'ngan', 'vietnam'];
@@ -38,9 +32,6 @@ export function Sidebar({
   categories,
   onSelectFilter,
   onGoHome,
-  onOpenShorts,
-  onOpenAssistant,
-  onOpenWatchParty,
 }: SidebarProps) {
   const choose = (patch: Partial<FilterState>) => {
     onSelectFilter(patch);
@@ -60,19 +51,6 @@ export function Sidebar({
         >
           <div className="yt-sidebar-item-icon"><IoHomeOutline size={21} /></div>
           <span className="yt-sidebar-item-text">Trang chủ</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            onOpenShorts();
-            if (isOverlayMode) onClose();
-          }}
-          className="yt-sidebar-item"
-          style={{ width: '100%', border: 'none', background: 'transparent', textAlign: 'left', cursor: 'pointer' }}
-        >
-          <div className="yt-sidebar-item-icon"><IoFilmOutline size={21} /></div>
-          <span className="yt-sidebar-item-text">Shorts dọc</span>
         </button>
 
         <button
@@ -132,32 +110,6 @@ export function Sidebar({
         >
           <div className="yt-sidebar-item-icon"><IoBookmarkOutline size={21} /></div>
           <span className="yt-sidebar-item-text">Xem sau (Đã lưu)</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            onOpenAssistant();
-            if (isOverlayMode) onClose();
-          }}
-          className="yt-sidebar-item"
-          style={{ width: '100%', border: 'none', background: 'transparent', textAlign: 'left', cursor: 'pointer' }}
-        >
-          <div className="yt-sidebar-item-icon"><IoSparklesOutline size={21} color="#3ea6ff" /></div>
-          <span className="yt-sidebar-item-text">Trợ lý tìm phim AI</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            onOpenWatchParty();
-            if (isOverlayMode) onClose();
-          }}
-          className="yt-sidebar-item"
-          style={{ width: '100%', border: 'none', background: 'transparent', textAlign: 'left', cursor: 'pointer' }}
-        >
-          <div className="yt-sidebar-item-icon"><IoPeopleOutline size={21} color="#10b981" /></div>
-          <span className="yt-sidebar-item-text">Phòng xem chung</span>
         </button>
       </div>
 
