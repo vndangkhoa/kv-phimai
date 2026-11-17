@@ -49,7 +49,7 @@ docker run -d --name kv-phimai --restart unless-stopped \
 docker compose up -d
 ```
 
-**Synology (SPK)** — install *KV PhimAI* from the package source `https://syno.vndns.net`. The install wizard asks for the **video backend URL** and type (KV-Tube or Invidious). To change it later, run *Upgrade* or *Repair* on the package and enter the new address (leave blank to keep the current one).
+**Synology (SPK)** — install *KV PhimAI* from the package source `https://syno.vndns.net`. The install wizard asks for the **video backend URL** and type (KV-Tube or Invidious). The same question appears on every package update, so you can change the address then (leave blank to keep the current one).
 
 ### Changing the backend later
 Re-create the container with the new environment variable (Docker), or re-run the SPK wizard (Synology). The catalog, ratings and comments in the data volume are kept.
@@ -62,7 +62,7 @@ PhimAI **không kèm máy chủ phát video**. Bạn cần tự chạy **KV-Tube
 
 - KV-Tube: đặt `KVTUBE_URL=https://dia-chi-kvtube-cua-ban`
 - Invidious: đặt `INVIDIOUS_UPSTREAM=https://dia-chi-invidious` (và `COMPANION_URL` nếu Companion nằm ở máy khác)
-- Gói SPK Synology: nhập địa chỉ ở bước "Máy chủ video" khi cài; muốn đổi thì chạy *Nâng cấp/Sửa chữa* gói.
+- Gói SPK Synology: nhập địa chỉ ở bước "Máy chủ video" khi cài; mỗi lần cập nhật gói, trình cài đặt sẽ hỏi lại (để trống = giữ nguyên).
 
 Kiểm tra tại `/api/health` → `"backendConfigured": true`. Nếu chưa cấu hình, trang web vẫn hiện danh sách phim nhưng không phát được và sẽ hiển thị thông báo hướng dẫn.
 
