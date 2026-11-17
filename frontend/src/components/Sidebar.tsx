@@ -13,6 +13,7 @@ import {
 } from 'react-icons/io5';
 import type { Film, FilterState } from '../types/phimai';
 import { CAT_LABEL, GENRE_GROUPS, viewsNumber } from '../utils/phimaiUtils';
+import { Logo } from './Logo';
 import {
   getSubscribedChannels,
   SUBSCRIPTIONS_EVENT,
@@ -311,9 +312,7 @@ export function Sidebar({
             >
               <IoMenuOutline size={22} />
             </button>
-            <span style={{ fontWeight: 800, fontSize: '17px', color: 'var(--yt-text-primary)' }}>
-              PhimAI
-            </span>
+            <Logo size={24} />
           </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>{content}</div>
         </aside>

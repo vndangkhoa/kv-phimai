@@ -1,0 +1,119 @@
+{
+  "name": "PhimAI — Rạp Phim AI Chọn Lọc 4K",
+  "short_name": "PhimAI",
+  "description": "Kho 9.220+ bộ phim AI chọn lọc Vietsub, thuyết minh, trọn bộ chất lượng lên đến 4K với trình phát thích ứng băng thông.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#0f0f0f",
+  "theme_color": "#0f0f0f",
+  "lang": "vi",
+  "categories": ["entertainment", "video"],
+  "prefer_related_applications": false,
+  "shortcuts": [
+    {
+      "name": "Đang thịnh hành",
+      "short_name": "Thịnh hành",
+      "description": "Xem các phim AI đang thịnh hành nhất",
+      "url": "/?sort=hot",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Kênh Phim AI",
+      "short_name": "Kênh",
+      "description": "Khám phá và lướt các kênh sáng tạo Phim AI",
+      "url": "/channels",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Trọn bộ FULL",
+      "short_name": "Phim FULL",
+      "description": "Xem danh sách phim trọn bộ đầy đủ",
+      "url": "/?full=1",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Lịch sử đã xem",
+      "short_name": "Lịch sử",
+      "description": "Tiếp tục các phim đã xem gần đây",
+      "url": "/?sort=history",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-72x72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-96x96.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-128x128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-144x144.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-152x152.png",
+      "sizes": "152x152",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-384x384.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

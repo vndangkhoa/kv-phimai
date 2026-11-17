@@ -6,6 +6,7 @@ import {
   IoArrowBack,
 } from 'react-icons/io5';
 import type { Film } from '../types/phimai';
+import { Logo } from './Logo';
 
 interface HeaderProps {
   query: string;
@@ -82,43 +83,11 @@ export function Header({
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '7px',
                 textDecoration: 'none',
-                color: 'var(--yt-text-primary)',
-                fontWeight: 800,
-                fontSize: '18px',
-                letterSpacing: '-0.4px',
               }}
               title="PhimAI — Trang chủ"
             >
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: '30px',
-                  height: '21px',
-                  borderRadius: '6px',
-                  backgroundColor: '#ff0033',
-                  color: '#ffffff',
-                  fontSize: '11px',
-                  fontWeight: 900,
-                }}
-              >
-                ▶
-              </span>
-              <span>PhimAI</span>
-              <span
-                style={{
-                  fontSize: '10px',
-                  fontWeight: 700,
-                  color: 'var(--yt-text-secondary)',
-                  alignSelf: 'flex-start',
-                  marginTop: '2px',
-                }}
-              >
-                4K
-              </span>
+              <Logo size={26} />
             </a>
 
             <span

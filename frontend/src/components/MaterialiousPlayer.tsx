@@ -16,10 +16,15 @@ import {
   IoCheckmark,
   IoArrowBack,
   IoCloseOutline,
-  IoFilmOutline,
   IoTimerOutline,
 } from 'react-icons/io5';
 import { MdPictureInPictureAlt } from 'react-icons/md';
+import {
+  useMediaSession,
+  setMediaSessionPlaybackState,
+  updateMediaSessionPosition,
+} from '../hooks/useMediaSession';
+import { Logo } from './Logo';
 import {
   fetchVideoStream,
   buildQualityList,
@@ -133,6 +138,17 @@ export function MaterialiousPlayer({
   const [activeCaptionUrl, setActiveCaptionUrl] = useState<string | null>(null);
   const [seekRipple, setSeekRipple] = useState<{ side: 'left' | 'right'; text: string } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useMediaSession({
+    videoId,
+    title,
+    uploader,
+    thumbnail,
+    getVideo: () => videoRef.current,
+    getAudio: () => audioRef.current,
+    onNext,
+    onPrev,
+  });
 
   useEffect(() => {
     return bandwidthMonitor.subscribe((mbps) => {
@@ -623,6 +639,10 @@ export function MaterialiousPlayer({
 
     const onPlay = () => {
       setIsPlaying(true);
+      setMediaSessionPlaybackState('playing');
+      if (Number.isFinite(vid.duration) && vid.duration > 0) {
+        updateMediaSessionPosition(vid.duration, vid.playbackRate || playbackRate || 1, vid.currentTime);
+      }
       if (needsSeparateAudio && aud && aud.paused) {
         if (Math.abs(aud.currentTime - vid.currentTime) > 0.25) {
           aud.currentTime = vid.currentTime;
@@ -633,6 +653,10 @@ export function MaterialiousPlayer({
 
     const onPause = () => {
       setIsPlaying(false);
+      setMediaSessionPlaybackState('paused');
+      if (Number.isFinite(vid.duration) && vid.duration > 0) {
+        updateMediaSessionPosition(vid.duration, vid.playbackRate || playbackRate || 1, vid.currentTime);
+      }
       if (aud && !aud.paused) {
         aud.pause();
       }
@@ -642,6 +666,10 @@ export function MaterialiousPlayer({
       const cur = vid.currentTime;
       setCurrentTime(cur);
       onTimeUpdate?.(cur);
+
+      if (Number.isFinite(vid.duration) && vid.duration > 0 && Math.floor(cur) !== Math.floor(cur - 0.3)) {
+        updateMediaSessionPosition(vid.duration, vid.playbackRate || playbackRate || 1, cur);
+      }
 
       // Persist playback progress locally for home card red progress bars
       if (videoId && vid.duration > 30 && Math.floor(cur) % 4 === 0) {
@@ -686,6 +714,7 @@ export function MaterialiousPlayer({
     const onDurationChange = () => {
       if (Number.isFinite(vid.duration) && vid.duration > 0) {
         setDuration(vid.duration);
+        updateMediaSessionPosition(vid.duration, vid.playbackRate || playbackRate || 1, vid.currentTime);
       }
     };
 
@@ -717,6 +746,10 @@ export function MaterialiousPlayer({
       playbackStartedRef.current = true;
       setIsBuffering(false);
       setDataLoaded(true);
+      setMediaSessionPlaybackState('playing');
+      if (Number.isFinite(vid.duration) && vid.duration > 0) {
+        updateMediaSessionPosition(vid.duration, vid.playbackRate || playbackRate || 1, vid.currentTime);
+      }
       if (needsSeparateAudio && aud && aud.paused && !vid.paused) {
         if (Math.abs(aud.currentTime - vid.currentTime) > 0.2) {
           aud.currentTime = vid.currentTime;
@@ -1191,10 +1224,15 @@ export function MaterialiousPlayer({
                   gap: '5px',
                 }}
               >
-                <IoFilmOutline size={11} />
-                <span>{uploader || 'PhimAI'}</span>
+                <Logo size={13} showText={false} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {uploader || 'PhimAI'}
+                </span>
                 <span>•</span>
-                <span>{formatTime(currentTime)}</span>
+                <span style={{ flexShrink: 0 }}>
+                  {formatTime(currentTime)}
+                  {duration > 0 ? ` / ${formatTime(duration)}` : ''}
+                </span>
               </div>
             </div>
             <div
@@ -1215,7 +1253,28 @@ export function MaterialiousPlayer({
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', paddingRight: '6px', gap: '2px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', paddingRight: '6px', gap: '1px', flexShrink: 0 }}>
+            {onPrev && (
+              <button
+                type="button"
+                onClick={onPrev}
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '50%',
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--yt-text-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+                title="Phim trước"
+              >
+                <IoPlaySkipBack size={15} />
+              </button>
+            )}
             <button
               type="button"
               onClick={togglePlay}
@@ -1224,7 +1283,7 @@ export function MaterialiousPlayer({
                 height: '32px',
                 borderRadius: '50%',
                 border: 'none',
-                background: 'transparent',
+                background: 'rgba(255,255,255,0.08)',
                 color: 'var(--yt-text-primary)',
                 display: 'flex',
                 alignItems: 'center',
@@ -1233,14 +1292,35 @@ export function MaterialiousPlayer({
               }}
               title={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
             >
-              {isPlaying ? <IoPause size={18} /> : <IoPlay size={18} />}
+              {isPlaying ? <IoPause size={17} /> : <IoPlay size={17} />}
             </button>
+            {onNext && (
+              <button
+                type="button"
+                onClick={onNext}
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '50%',
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--yt-text-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+                title="Phim tiếp theo"
+              >
+                <IoPlaySkipForward size={15} />
+              </button>
+            )}
             <button
               type="button"
               onClick={onCloseMiniPlayer}
               style={{
-                width: '32px',
-                height: '32px',
+                width: '28px',
+                height: '28px',
                 borderRadius: '50%',
                 border: 'none',
                 background: 'transparent',
@@ -1252,7 +1332,7 @@ export function MaterialiousPlayer({
               }}
               title="Đóng trình phát thu nhỏ"
             >
-              <IoCloseOutline size={20} />
+              <IoCloseOutline size={18} />
             </button>
           </div>
         </>

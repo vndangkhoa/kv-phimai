@@ -1,0 +1,20 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="phimai-mask-bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FF244C" />
+      <stop offset="52%" stop-color="#FF0033" />
+      <stop offset="100%" stop-color="#A80020" />
+    </linearGradient>
+  </defs>
+  <!-- Full-bleed background for adaptive/maskable launcher icons -->
+  <rect width="512" height="512" fill="url(#phimai-mask-bg)" />
+  <!-- Centered within inner 66% safe zone -->
+  <path
+    d="M204 170C204 160.2 214.9 154.3 223.1 159.6L347 239.6C354.5 244.4 354.5 255.6 347 260.4L223.1 340.4C214.9 345.7 204 339.8 204 330V170Z"
+    fill="#FFFFFF"
+  />
+  <path
+    d="M352 114L360.5 140.5L387 149L360.5 157.5L352 184L343.5 157.5L317 149L343.5 140.5L352 114Z"
+    fill="#FFF5CC"
+  />
+</svg>
