@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"phimai-backend/internal/kvtube"
 	"phimai-backend/internal/models"
 )
+
+var rePlaylistID = regexp.MustCompile(`(?i)[?&]list=([A-Za-z0-9_-]{12,})`)
 
 type CrawlerStatus struct {
 	IsRunning    bool          `json:"isRunning"`
@@ -428,11 +431,175 @@ func (c *Catalog) AddCrawledFilms(candidates []models.Film) (int, []models.Film)
 	}
 	c.RecentCrawled = topRecent
 
+	c.buildSeriesGroups()
 	c.rebuildManifestCountsLocked()
 	c.persistCrawledFilmsLocked()
 
 	log.Printf("[AutoCrawler] Added %d new AI/Short Drama releases (catalog live: %d)", len(added), len(c.Films)-len(c.DeadIDs))
 	return len(added), added
+}
+
+// GetChannelAuthorID looks up a channel's YouTube author ID thread-safely.
+func (c *Catalog) GetChannelAuthorID(channelName string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if id, ok := c.ChannelIDs[channelName]; ok {
+		return id
+	}
+	normTarget := ViNorm(channelName)
+	for k, v := range c.ChannelIDs {
+		if ViNorm(k) == normTarget {
+			return v
+		}
+	}
+	return ""
+}
+
+// DiscoverSeriesEpisodes automatically discovers and adds missing episodes ("Tập 1, Tập 2, Tập 3...")
+// belonging to the same movie as filmID using official playlist links, YouTube search, and channel uploads.
+func (c *Catalog) DiscoverSeriesEpisodes(ctx context.Context, kvt *kvtube.Service, filmID string, force bool) (int, []models.Film) {
+	if kvt == nil {
+		return 0, c.GetSeries(filmID)
+	}
+	film, ok := c.GetFilmByID(filmID)
+	if !ok {
+		return 0, nil
+	}
+
+	seriesKey, baseTitleRaw, _, hasPart := ExtractSeriesInfo(film.Title, film.Channel)
+	existingSeries := c.GetSeries(filmID)
+	normBase := ViNorm(baseTitleRaw)
+	if seriesKey == "" || len(strings.Fields(normBase)) < 2 {
+		return 0, existingSeries
+	}
+	if !hasPart && len(existingSeries) < 2 {
+		// Only auto-expand single movies that look episodic or belong to a playlist
+		descAll := film.Blurb + " " + film.BlurbLong
+		if !rePlaylistID.MatchString(descAll) {
+			return 0, existingSeries
+		}
+	}
+
+	// Throttle repeated automatic lookups for the same series to 5 minutes unless explicitly forced
+	c.mu.Lock()
+	if c.SeriesCrawlAt == nil {
+		c.SeriesCrawlAt = make(map[string]time.Time)
+	}
+	lastRun, seen := c.SeriesCrawlAt[seriesKey]
+	if !force && seen && time.Since(lastRun) < 5*time.Minute {
+		c.mu.Unlock()
+		return 0, existingSeries
+	}
+	c.SeriesCrawlAt[seriesKey] = time.Now()
+	c.mu.Unlock()
+
+	var discovered []kvtube.CrawledVideoItem
+	seenVid := make(map[string]bool)
+	addRaw := func(items []kvtube.CrawledVideoItem) {
+		for _, it := range items {
+			if it.VideoID != "" && !seenVid[it.VideoID] {
+				seenVid[it.VideoID] = true
+				discovered = append(discovered, it)
+			}
+		}
+	}
+
+	// 1. Check for official YouTube playlist link inside blurb / blurbLong / live upstream description
+	playlistID := ""
+	if m := rePlaylistID.FindStringSubmatch(film.BlurbLong + " " + film.Blurb); len(m) >= 2 {
+		playlistID = m[1]
+	}
+	if playlistID == "" {
+		infoCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		vInfo := kvt.GetVideo(infoCtx, film.ID, &film, nil, nil, nil)
+		cancel()
+		if vInfo.Description != "" {
+			if m := rePlaylistID.FindStringSubmatch(vInfo.Description); len(m) >= 2 {
+				playlistID = m[1]
+			}
+		}
+		if vInfo.AuthorID != "" && film.Channel != "" {
+			c.mu.Lock()
+			if c.ChannelIDs[film.Channel] == "" {
+				c.ChannelIDs[film.Channel] = vInfo.AuthorID
+			}
+			c.mu.Unlock()
+		}
+	}
+	if playlistID != "" && !strings.EqualFold(playlistID, "WL") && !strings.EqualFold(playlistID, "LL") {
+		plCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		if plItems, err := kvt.FetchPlaylistVideos(plCtx, playlistID, film.Channel); err == nil {
+			addRaw(plItems)
+		}
+		cancel()
+	}
+
+	// 2. Targeted YouTube / Invidious search for all episodes of this exact movie
+	queries := []struct {
+		q          string
+		sortByDate bool
+	}{
+		{q: fmt.Sprintf("%s Tập %s", baseTitleRaw, film.Channel), sortByDate: false},
+		{q: fmt.Sprintf("\"%s\" Tập", baseTitleRaw), sortByDate: false},
+		{q: fmt.Sprintf("%s Tập", baseTitleRaw), sortByDate: false},
+		{q: fmt.Sprintf("%s Tập", baseTitleRaw), sortByDate: true},
+	}
+	for _, qc := range queries {
+		if ctx.Err() != nil {
+			break
+		}
+		qCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		if items, err := kvt.SearchLatestVideos(qCtx, qc.q, qc.sortByDate); err == nil {
+			addRaw(items)
+		}
+		cancel()
+	}
+
+	// 3. Check channel's latest videos if we know its YouTube UC... channel ID
+	if aid := c.GetChannelAuthorID(film.Channel); strings.HasPrefix(aid, "UC") && ctx.Err() == nil {
+		chCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		if chItems, err := kvt.FetchChannelLatestVideos(chCtx, aid, film.Channel); err == nil {
+			addRaw(chItems)
+		}
+		cancel()
+	}
+
+	normFilmCh := ViNorm(film.Channel)
+	var newFilms []models.Film
+	for _, raw := range discovered {
+		if raw.LengthSeconds <= 0 {
+			raw.LengthSeconds = 1800
+		}
+		ch := strings.TrimSpace(raw.Channel)
+		if ch == "" {
+			ch = film.Channel
+		}
+		normCandCh := ViNorm(ch)
+		candKey, _, _, candPart := ExtractSeriesInfo(raw.Title, ch)
+		normCandTitle := ViNorm(raw.Title)
+
+		sameChannel := normFilmCh == "" || normCandCh == "" || normCandCh == normFilmCh ||
+			strings.Contains(normCandCh, normFilmCh) || strings.Contains(normFilmCh, normCandCh)
+		titleMatchesBase := normCandTitle != "" && strings.Contains(normCandTitle, normBase)
+		sameSeries := candKey == seriesKey || (sameChannel && titleMatchesBase && (candPart || rePartRange.MatchString(raw.Title)))
+		if !sameSeries {
+			continue
+		}
+		// Ensure channel matches original movie channel when merging into the same series group
+		if sameChannel {
+			raw.Channel = film.Channel
+		}
+		classified, ok := classifyCrawledVideo(raw, film.Cat, true)
+		if !ok {
+			continue
+		}
+		classified.Channel = film.Channel
+		classified.Cat = film.Cat
+		newFilms = append(newFilms, classified)
+	}
+
+	added, _ := c.AddCrawledFilms(newFilms)
+	return added, c.GetSeries(filmID)
 }
 
 // RunCrawlCycle executes one discovery batch across curated AI film/short-drama searches and known channels.
@@ -548,7 +715,28 @@ func (c *Catalog) RunCrawlCycle(ctx context.Context, kvt *kvtube.Service, maxQue
 	}
 	c.mu.Unlock()
 
-	return c.AddCrawledFilms(candidates)
+	addedCount, addedFilms := c.AddCrawledFilms(candidates)
+
+	// 3. Expand sibling episodes ("Tập 1, Tập 2, Tập 3...") for newly discovered episodic series
+	expandedSeries := 0
+	seenSeries := make(map[string]bool)
+	for _, f := range addedFilms {
+		if ctx.Err() != nil || expandedSeries >= 2 {
+			break
+		}
+		sKey, _, _, hasPart := ExtractSeriesInfo(f.Title, f.Channel)
+		if !hasPart || sKey == "" || seenSeries[sKey] {
+			continue
+		}
+		seenSeries[sKey] = true
+		expandedSeries++
+		epCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		epAdded, _ := c.DiscoverSeriesEpisodes(epCtx, kvt, f.ID, false)
+		cancel()
+		addedCount += epAdded
+	}
+
+	return addedCount, addedFilms
 }
 
 // StartAutoCrawler starts the periodic background discovery loop for latest AI videos and short dramas.

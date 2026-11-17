@@ -77,6 +77,7 @@ type KVTubeVideoResponse struct {
 	Title           string                   `json:"title"`
 	Author          string                   `json:"author"`
 	AuthorID        string                   `json:"authorId"`
+	Description     string                   `json:"description,omitempty"`
 	LengthSeconds   int                      `json:"lengthSeconds"`
 	ViewCount       int64                    `json:"viewCount"`
 	WatchURL        string                   `json:"watchUrl"`

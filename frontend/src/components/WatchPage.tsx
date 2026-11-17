@@ -12,12 +12,14 @@ import {
   IoArrowBack,
   IoPersonAddOutline,
   IoCheckmark,
+  IoRefreshOutline,
 } from 'react-icons/io5';
 import type { Film, FilterState } from '../types/phimai';
 import {
   CAT_LABEL,
   formatClock,
   formatViewsVN,
+  getEpisodeNumber,
   getSeriesEpisodes,
   getThumbUrl,
 } from '../utils/phimaiUtils';
@@ -49,6 +51,7 @@ interface WatchPageProps {
   onFilterByPatch: (patch: Partial<FilterState>) => void;
   onSeekToSec: (sec: number) => void;
   onRateSuccess: (id: string, rating: { s: number; n: number }) => void;
+  onMergeFilms?: (films: Film[]) => void;
 }
 
 export function WatchPage({
@@ -64,6 +67,7 @@ export function WatchPage({
   onFilterByPatch,
   onSeekToSec,
   onRateSuccess,
+  onMergeFilms,
 }: WatchPageProps) {
   const [expandedDesc, setExpandedDesc] = useState(false);
   const [wideMode, setWideMode] = useState(false);
@@ -82,6 +86,8 @@ export function WatchPage({
   const [hoverStar, setHoverStar] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
   const [subscribed, setSubscribed] = useState(() => isChannelSubscribed(film.channel));
+  const [discoveringEps, setDiscoveringEps] = useState(false);
+  const [discoverMsg, setDiscoverMsg] = useState<string | null>(null);
   const chipBarRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -116,6 +122,7 @@ export function WatchPage({
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     setExpandedDesc(false);
     setRichBlurbLong(film.blurbLong || '');
+    setDiscoverMsg(null);
   }, [film.id, film.blurbLong]);
 
   // Fetch film detail + comments + record view
@@ -136,7 +143,10 @@ export function WatchPage({
         if (cancelled || !res) return;
         if (res.film?.blurbLong) setRichBlurbLong(res.film.blurbLong);
         if (Array.isArray(res.related) && res.related.length > 0) setApiRelated(res.related);
-        if (Array.isArray(res.series) && res.series.length > 0) setApiSeries(res.series);
+        if (Array.isArray(res.series) && res.series.length > 0) {
+          setApiSeries(res.series);
+          onMergeFilms?.(res.series);
+        }
       })
       .catch(() => {});
 
@@ -162,11 +172,59 @@ export function WatchPage({
     };
   }, [film.id]);
 
-  // Compute series & related films
+  // Compute merged series episodes sorted strictly by episode order (Tập 1, Tập 2, Tập 3...)
   const seriesEpisodes = useMemo(() => {
-    if (apiSeries.length >= 2) return apiSeries;
-    return getSeriesEpisodes(film, allFilms);
+    const localEps = getSeriesEpisodes(film, allFilms);
+    const byId = new Map<string, Film>();
+    for (const ep of apiSeries) if (ep?.id) byId.set(ep.id, ep);
+    for (const ep of localEps) if (ep?.id && !byId.has(ep.id)) byId.set(ep.id, ep);
+    if (!byId.has(film.id)) byId.set(film.id, film);
+
+    const list = Array.from(byId.values());
+    if (list.length < 2 && getEpisodeNumber(film) === null) return [];
+    return list.sort((a, b) => {
+      const ordA = getEpisodeNumber(a) ?? 9999;
+      const ordB = getEpisodeNumber(b) ?? 9999;
+      return ordA - ordB || a.rank - b.rank;
+    });
   }, [apiSeries, film, allFilms]);
+
+  const currentEpIdx = useMemo(
+    () => seriesEpisodes.findIndex((ep) => ep.id === film.id),
+    [seriesEpisodes, film.id]
+  );
+
+  const nextSeriesEpisode = useMemo(
+    () =>
+      currentEpIdx >= 0 && currentEpIdx + 1 < seriesEpisodes.length
+        ? seriesEpisodes[currentEpIdx + 1]
+        : null,
+    [seriesEpisodes, currentEpIdx]
+  );
+
+  const handleDiscoverMoreEpisodes = async () => {
+    if (discoveringEps) return;
+    setDiscoveringEps(true);
+    setDiscoverMsg(null);
+    try {
+      const res = await fetch(`/api/films/${encodeURIComponent(film.id)}/episodes?force=1`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.episodes) && data.episodes.length > 0) {
+          setApiSeries(data.episodes as Film[]);
+          onMergeFilms?.(data.episodes as Film[]);
+        }
+        const added = Number(data?.added || 0);
+        setDiscoverMsg(added > 0 ? `Đã thêm ${added} tập mới!` : 'Đã cập nhật đủ tập mới nhất');
+      }
+    } catch {
+      setDiscoverMsg('Không thể tìm thêm tập lúc này');
+    } finally {
+      setDiscoveringEps(false);
+    }
+  };
 
   const channelFilmCount = useMemo(
     () => allFilms.filter((f) => f.channel === film.channel).length,
@@ -174,8 +232,29 @@ export function WatchPage({
   );
 
   const relatedList = useMemo(() => {
-    const base = apiRelated.length > 0 ? [...apiRelated] : [];
-    const seen = new Set<string>([film.id, ...base.map((b) => b.id)]);
+    const base: Film[] = [];
+    const seen = new Set<string>([film.id]);
+
+    // Prioritize upcoming episodes of the same movie at the top of the Up Next sidebar
+    if ((sideFilter === 'all' || sideFilter === 'channel') && seriesEpisodes.length > 1) {
+      const upcoming =
+        currentEpIdx >= 0
+          ? seriesEpisodes.slice(currentEpIdx + 1)
+          : seriesEpisodes.filter((e) => e.id !== film.id);
+      for (const ep of upcoming) {
+        if (!seen.has(ep.id)) {
+          seen.add(ep.id);
+          base.push(ep);
+        }
+      }
+    }
+
+    for (const rel of apiRelated) {
+      if (rel?.id && !seen.has(rel.id)) {
+        seen.add(rel.id);
+        base.push(rel);
+      }
+    }
     for (const f of allFilms) {
       if (base.length >= 36) break;
       if (seen.has(f.id)) continue;
@@ -196,14 +275,15 @@ export function WatchPage({
       return base.filter((f) => f.cat === film.cat);
     }
     if (sideFilter === 'channel') {
-      const sameCh = allFilms.filter((f) => f.id !== film.id && f.channel === film.channel);
-      return sameCh.length > 0 ? sameCh : base;
+      const restSameCh = allFilms.filter((f) => !seen.has(f.id) && f.channel === film.channel);
+      const mergedCh = [...base.filter((f) => f.channel === film.channel), ...restSameCh];
+      return mergedCh.length > 0 ? mergedCh : base;
     }
     if (sideFilter === 'full') {
       return base.filter((f) => /full|trọn/i.test(f.dur || ''));
     }
     return base;
-  }, [apiRelated, allFilms, film.id, film.cat, film.channel, sideFilter]);
+  }, [apiRelated, allFilms, film.id, film.cat, film.channel, sideFilter, seriesEpisodes, currentEpIdx]);
 
   const avgStars =
     rating && rating.n > 0 ? (rating.s / rating.n).toFixed(1) : '5.0';
@@ -497,9 +577,10 @@ export function WatchPage({
             </div>
           </div>
 
-          {/* Series Episodes Strip (if film belongs to multi-part series) */}
-          {seriesEpisodes.length >= 2 && (
+          {/* Series Episodes Strip (when movie is multi-part or episodic) */}
+          {(seriesEpisodes.length >= 2 || getEpisodeNumber(film) !== null) && (
             <div
+              data-testid="series-episodes-strip"
               style={{
                 marginTop: '14px',
                 padding: '12px 14px',
@@ -508,18 +589,74 @@ export function WatchPage({
                 border: '1px solid var(--yt-border)',
               }}
             >
-              <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '8px' }}>
-                Các phần cùng bộ ({seriesEpisodes.length} tập)
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '8px',
+                  marginBottom: '10px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 700 }}>
+                    Các phần cùng bộ ({Math.max(seriesEpisodes.length, 1)} tập)
+                  </span>
+                  {nextSeriesEpisode && (
+                    <span
+                      style={{
+                        fontSize: '11.5px',
+                        fontWeight: 600,
+                        color: 'var(--yt-blue)',
+                        backgroundColor: 'rgba(62, 166, 255, 0.14)',
+                        padding: '2px 8px',
+                        borderRadius: '999px',
+                      }}
+                    >
+                      Tự động phát tiếp: Tập {getEpisodeNumber(nextSeriesEpisode) ?? currentEpIdx + 2}
+                    </span>
+                  )}
+                  {discoverMsg && (
+                    <span style={{ fontSize: '11.5px', color: '#4ade80', fontWeight: 600 }}>
+                      {discoverMsg}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  data-testid="discover-episodes-btn"
+                  onClick={handleDiscoverMoreEpisodes}
+                  disabled={discoveringEps}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '4px 10px',
+                    borderRadius: '14px',
+                    border: '1px solid var(--yt-border)',
+                    backgroundColor: 'var(--yt-background)',
+                    color: 'var(--yt-text-primary)',
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    cursor: discoveringEps ? 'wait' : 'pointer',
+                    opacity: discoveringEps ? 0.7 : 1,
+                  }}
+                >
+                  <IoRefreshOutline size={13} />
+                  <span>{discoveringEps ? 'Đang tìm tập...' : 'Tìm thêm tập'}</span>
+                </button>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {seriesEpisodes.map((ep, idx) => (
+                {(seriesEpisodes.length > 0 ? seriesEpisodes : [film]).map((ep, idx) => (
                   <button
                     type="button"
                     key={ep.id}
+                    data-testid={`series-ep-${idx + 1}`}
                     onClick={() => onSelectFilm(ep)}
                     className={`phimai-ep-chip ${ep.id === film.id ? 'active' : ''}`}
                   >
-                    <span>Tập {idx + 1}</span>
+                    <span>Tập {getEpisodeNumber(ep) ?? idx + 1}</span>
                     {ep.dur && <span style={{ opacity: 0.72, fontSize: '11px' }}>({ep.dur})</span>}
                   </button>
                 ))}
@@ -796,7 +933,26 @@ export function WatchPage({
                   {rel.dur && <span className="yt-related-duration">{rel.dur}</span>}
                 </div>
                 <div className="yt-related-info">
-                  <div className="yt-related-title">{rel.title}</div>
+                  <div className="yt-related-title">
+                    {nextSeriesEpisode && rel.id === nextSeriesEpisode.id && (
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          backgroundColor: '#ff0033',
+                          color: '#fff',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          padding: '1px 5px',
+                          borderRadius: '4px',
+                          marginRight: '5px',
+                          verticalAlign: 'middle',
+                        }}
+                      >
+                        Tập tiếp theo
+                      </span>
+                    )}
+                    {rel.title}
+                  </div>
                   <div className="yt-related-channel">{rel.channel}</div>
                   <div className="yt-related-meta">
                     {formatViewsVN(rel.views)} • {CAT_LABEL[rel.cat] || rel.cat}

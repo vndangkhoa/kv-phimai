@@ -572,33 +572,113 @@ function cleanSegment(seg: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-export function getSeriesEpisodes(film: Film, allFilms: Film[]): Film[] {
-  const [part] = findPart(normSeries(film.title));
-  const segs = normSeries(film.title)
-    .split(/[｜│|]/)
-    .map((s) => cleanSegment(s))
-    .filter((s) => s.length >= 6 && !s.split(' ').every((w) => GENERIC_WORDS.has(w)));
+const GENERIC_SERIES_PHRASES = new Set([
+  'phim',
+  'phim ai',
+  'phim ngan',
+  'phim moi',
+  'phim hay',
+  'review phim',
+  'phim thuyet minh',
+  'phim vietsub',
+  'phim ngon tinh',
+  'phim co trang',
+  'hoat hinh',
+  'hoat hinh 3d',
+  'short drama',
+  'full bo',
+  'tron bo',
+  'noi bat',
+  'tap moi',
+  'phan moi',
+]);
 
-  const base = segs[0];
+const PART_RANGE_RE = /(?:tap|phan|part|ep|episode)\s*\d+\s*[-–~]\s*\d+/i;
+const RAW_EP_STRIP_RE = /[\(\[【]?\s*(?:tập|tap|phần|phan|part|ep|episode|chương|chuong|mùa|mua|season|p)\s*0*\d+(?:\s*[-–~]\s*\d+)?\s*[\)\]】.\-:]*/gi;
+
+export function getEpisodeNumber(film: Pick<Film, 'title'>): number | null {
+  const raw = film?.title || '';
+  const n = normSeries(raw);
+  if (PART_RANGE_RE.test(n)) return null;
+  const [, num] = findPart(n);
+  return num;
+}
+
+export function getEpisodeInfo(
+  title: string,
+  channel = ''
+): { baseKey: string; baseTitle: string; epNum: number | null } {
+  const n = normSeries(title);
+  const epNum = PART_RANGE_RE.test(n) ? null : findPart(n)[1];
+  const pipeSegs = (title || '').split(/[｜│|]/);
+  const candidates: string[] = [];
+
+  for (const ps of pipeSegs) {
+    const m = RAW_EP_STRIP_RE.exec(ps);
+    RAW_EP_STRIP_RE.lastIndex = 0;
+    if (m && m.index > 2) {
+      const prefix = ps.slice(0, m.index).replace(/[-–—:•\s]+$/, '').trim();
+      if (prefix) candidates.push(prefix);
+    }
+    const stripped = ps.replace(RAW_EP_STRIP_RE, ' ').replace(/^[-–—:•\s]+|[-–—:•\s]+$/g, '').trim();
+    if (stripped) candidates.push(stripped);
+    for (const sub of ps.split(/[-—:]/)) {
+      const subClean = sub.replace(RAW_EP_STRIP_RE, ' ').trim();
+      if (subClean) candidates.push(subClean);
+    }
+  }
+
+  const normCh = cleanSegment(normSeries(channel));
+  for (const rawCand of candidates) {
+    const cleaned = cleanSegment(normSeries(rawCand));
+    const words = cleaned.split(' ').filter(Boolean);
+    if (
+      words.length >= 2 &&
+      cleaned !== normCh &&
+      !GENERIC_SERIES_PHRASES.has(cleaned) &&
+      !words.every((w) => GENERIC_WORDS.has(w))
+    ) {
+      const baseKey = words.slice(0, 7).join(' ');
+      const baseTitle = rawCand.trim().split(/\s+/).slice(0, 7).join(' ');
+      return { baseKey, baseTitle, epNum };
+    }
+  }
+
+  return { baseKey: '', baseTitle: '', epNum };
+}
+
+export function getSeriesEpisodes(film: Film, allFilms: Film[]): Film[] {
+  const info = getEpisodeInfo(film.title, film.channel);
+  const base = info.baseKey;
   if (!base) return [];
 
-  const candidates = allFilms.filter((f) => {
-    if (f.channel !== film.channel) return false;
-    const fNorm = normSeries(f.title);
-    return fNorm.includes(base);
-  });
+  const targetChannel = normSeries(film.channel || '');
+  const seen = new Set<string>();
+  const candidates: Film[] = [];
 
-  if (candidates.length < 2 && !part) return [];
+  for (const f of allFilms) {
+    if (!f?.id || seen.has(f.id)) continue;
+    const fCh = normSeries(f.channel || '');
+    if (targetChannel && fCh && fCh !== targetChannel) continue;
+
+    const fInfo = getEpisodeInfo(f.title, f.channel);
+    const matchesKey = fInfo.baseKey === base;
+    const matchesNorm = fInfo.epNum !== null && cleanSegment(normSeries(f.title)).includes(base);
+    if (matchesKey || matchesNorm) {
+      seen.add(f.id);
+      candidates.push(f);
+    }
+  }
+
+  if (candidates.length < 2 && info.epNum === null) return [];
   return candidates
     .slice()
     .sort((a, b) => {
-      const [, ordA] = findPart(normSeries(a.title));
-      const [, ordB] = findPart(normSeries(b.title));
-      const oa = ordA ?? 9999;
-      const ob = ordB ?? 9999;
-      return oa - ob || a.rank - b.rank;
+      const ordA = getEpisodeNumber(a) ?? 9999;
+      const ordB = getEpisodeNumber(b) ?? 9999;
+      return ordA - ordB || a.rank - b.rank;
     })
-    .slice(0, 24);
+    .slice(0, 120);
 }
 
 // 18+ age verification helpers (device-local)

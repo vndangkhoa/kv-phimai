@@ -14,6 +14,8 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 	r.Get("/films", h.GetFilms)
 	r.Get("/films/search", h.SearchFilms)
 	r.Get("/films/{id}", h.GetFilmDetail)
+	r.Get("/films/{id}/episodes", h.DiscoverFilmEpisodes)
+	r.Post("/films/{id}/episodes", h.DiscoverFilmEpisodes)
 	r.Get("/channels", h.GetChannels)
 	r.Get("/channel/{id}", h.GetChannelDetail)
 	r.Get("/channel/*", h.GetChannelDetail)

@@ -178,7 +178,10 @@ export function MaterialiousPlayer({
       if (initialTimeSec > 0) return initialTimeSec;
       try {
         const raw = localStorage.getItem(`phimai_pos_${id}`);
+        const rawDur = localStorage.getItem(`phimai_dur_${id}`);
         const parsed = raw ? parseFloat(raw) : 0;
+        const parsedDur = rawDur ? parseFloat(rawDur) : 0;
+        if (parsedDur > 30 && parsed >= parsedDur - 15) return 0;
         return Number.isFinite(parsed) && parsed > 5 ? parsed : 0;
       } catch {
         return 0;
@@ -794,6 +797,11 @@ export function MaterialiousPlayer({
         if (needsSeparateAudio && aud) aud.currentTime = 0;
         vid.play().catch(() => {});
       } else {
+        try {
+          if (videoId) localStorage.removeItem(`phimai_pos_${videoId}`);
+        } catch {
+          // ignore
+        }
         onVideoEnd?.();
       }
     };

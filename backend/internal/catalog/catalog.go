@@ -39,6 +39,7 @@ type Catalog struct {
 
 	// Auto-crawler state (protected by mu)
 	CrawledIDs      map[string]bool
+	SeriesCrawlAt   map[string]time.Time
 	CrawlRunning    bool
 	LastCrawlAt     time.Time
 	TotalCrawled    int
@@ -85,7 +86,31 @@ var (
 	reDurG       = regexp.MustCompile(`(\d+)g(\d+)`)
 	reDurPhut    = regexp.MustCompile(`(\d+)\s*phút`)
 	reSeriesMon  = regexp.MustCompile(`(?i)\series|phần|mùa|tập|trọn`)
-	rePartNum    = regexp.MustCompile(`\b(?:phan|part|tap|ep|episode|chuong|chapter|mua|season|p)\s*(\d+)\b`)
+	rePartRange  = regexp.MustCompile(`(?i)(?:tap|tập|phan|phần|part|ep|episode)\s*\d+\s*[-–~]\s*\d+`)
+	rePartNum    = regexp.MustCompile(`\b(?:tap|phan|part|ep|episode|chuong|chapter|mua|season|p)\s*0*(\d+)\b`)
+	reBracketTag = regexp.MustCompile(`(?:【[^】]*】|\[[^\]]*\])`)
+	reRawEpStrip = regexp.MustCompile(`(?i)[\(\[【]?\s*(?:tap|tập|phan|phần|part|ep|episode|chương|chuong|mùa|mua|season|p)\s*0*\d+(?:\s*[-–~]\s*\d+)?\s*[\)\]】.\-:]*`)
+
+	genericSeriesPrefixes = map[string]bool{
+		"phim":            true,
+		"phim ai":         true,
+		"phim ngan":       true,
+		"phim moi":        true,
+		"phim hay":        true,
+		"review phim":     true,
+		"phim thuyet minh": true,
+		"phim vietsub":    true,
+		"phim ngon tinh":  true,
+		"phim co trang":   true,
+		"hoat hinh":       true,
+		"hoat hinh 3d":    true,
+		"short drama":     true,
+		"full bo":         true,
+		"tron bo":         true,
+		"noi bat":         true,
+		"tap moi":         true,
+		"phan moi":        true,
+	}
 )
 
 func NewCatalog(dataDir string, kvtubeURL string) *Catalog {
@@ -97,8 +122,9 @@ func NewCatalog(dataDir string, kvtubeURL string) *Catalog {
 		ByRank:       make(map[int]*models.Film),
 		DeadIDs:      make(map[string]bool),
 		ChannelIDs:   make(map[string]string),
-		CrawledIDs:   make(map[string]bool),
-		SeriesByFilm: make(map[string][]models.Film),
+		CrawledIDs:    make(map[string]bool),
+		SeriesCrawlAt: make(map[string]time.Time),
+		SeriesByFilm:  make(map[string][]models.Film),
 		ScreeningRaw: make(map[string]interface{}),
 	}
 	c.loadAll()
@@ -380,7 +406,83 @@ func (c *Catalog) mergeFilmItemsFile(filmMap map[string]models.Film, path string
 	}
 }
 
+// ExtractSeriesInfo extracts the normalized series key, human-readable movie title, and episode order from a title.
+func ExtractSeriesInfo(title string, channel string) (seriesKey string, baseTitleRaw string, order int, hasPart bool) {
+	normT := ViNorm(title)
+	order = 9999
+	isRange := rePartRange.MatchString(title)
+
+	if !isRange {
+		if m := rePartNum.FindStringSubmatch(normT); len(m) >= 2 {
+			order, _ = strconv.Atoi(m[1])
+			hasPart = true
+		} else if strings.Contains(normT, "phan dau") || strings.Contains(normT, "tap dau") {
+			order = 0
+			hasPart = true
+		} else if strings.Contains(normT, "phan cuoi") || strings.Contains(normT, "tap cuoi") {
+			order = 999
+			hasPart = true
+		}
+	}
+
+	// Strip channel/edition bracket tags such as [Kiwi Only] or 【Thuyết Minh】
+	cleanedTitle := strings.TrimSpace(reBracketTag.ReplaceAllString(title, " "))
+
+	// Split primary title segments first on pipe/vertical bar, then hyphen/colon if needed
+	pipeSegs := strings.FieldsFunc(cleanedTitle, func(r rune) bool {
+		return r == '|' || r == '｜' || r == '│'
+	})
+	var candidates []string
+	for _, ps := range pipeSegs {
+		// Strip trailing "- Tập 01..." or "(Tập 01)" within a segment
+		if idx := reRawEpStrip.FindStringIndex(ps); idx != nil && idx[0] > 2 {
+			prefix := strings.TrimSpace(ps[:idx[0]])
+			prefix = strings.TrimRight(prefix, "-–—:• ")
+			if prefix != "" {
+				candidates = append(candidates, prefix)
+			}
+		}
+		cleaned := reRawEpStrip.ReplaceAllString(ps, " ")
+		cleaned = strings.Trim(cleaned, "-–—:• ")
+		if cleaned != "" {
+			candidates = append(candidates, cleaned)
+		}
+		for _, sub := range strings.FieldsFunc(ps, func(r rune) bool { return r == '-' || r == ':' || r == '—' }) {
+			subClean := strings.TrimSpace(reRawEpStrip.ReplaceAllString(sub, " "))
+			if subClean != "" {
+				candidates = append(candidates, subClean)
+			}
+		}
+	}
+
+	normCh := ViNorm(channel)
+	for _, rawCand := range candidates {
+		ns := ViNorm(rawCand)
+		ns = rePartNum.ReplaceAllString(ns, "")
+		ns = strings.TrimSpace(ns)
+		words := strings.Fields(ns)
+		if len(words) < 2 || ns == normCh || genericSeriesPrefixes[ns] {
+			continue
+		}
+		if len(words) > 7 {
+			// Keep clean prefix up to 7 words max for stable matching across varying episode subtitles
+			ns = strings.Join(words[:7], " ")
+		}
+		baseTitleRaw = strings.TrimSpace(rawCand)
+		rawWords := strings.Fields(baseTitleRaw)
+		if len(rawWords) > 7 {
+			baseTitleRaw = strings.Join(rawWords[:7], " ")
+		}
+		if !hasPart && len(words) < 5 {
+			continue
+		}
+		return ns + "||" + normCh, baseTitleRaw, order, hasPart
+	}
+	return "", "", 9999, false
+}
+
 func (c *Catalog) buildSeriesGroups() {
+	c.SeriesByFilm = make(map[string][]models.Film)
 	type groupMember struct {
 		film  models.Film
 		order int
@@ -391,46 +493,15 @@ func (c *Catalog) buildSeriesGroups() {
 		if c.DeadIDs[f.ID] {
 			continue
 		}
-		normT := f.NormTitle
-		order := 9999
-		hasPart := false
-		if m := rePartNum.FindStringSubmatch(normT); len(m) >= 2 {
-			order, _ = strconv.Atoi(m[1])
-			hasPart = true
-		} else if strings.Contains(normT, "phan dau") {
-			order = 0
-			hasPart = true
-		} else if strings.Contains(normT, "phan cuoi") {
-			order = 999
-			hasPart = true
-		}
-
-		// Extract base title before "|" or part marker
-		segs := strings.FieldsFunc(f.Title, func(r rune) bool {
-			return r == '|' || r == '｜' || r == '│' || r == '-' || r == ':'
-		})
-		base := ""
-		for _, s := range segs {
-			ns := ViNorm(s)
-			ns = rePartNum.ReplaceAllString(ns, "")
-			ns = strings.TrimSpace(ns)
-			if len(strings.Fields(ns)) >= 3 && ns != f.NormChannel {
-				base = ns
-				break
-			}
-		}
-		if base == "" {
+		key, _, order, hasPart := ExtractSeriesInfo(f.Title, f.Channel)
+		if key == "" || !hasPart {
 			continue
 		}
-		if !hasPart && len(strings.Fields(base)) < 5 {
-			continue
-		}
-		key := base + "||" + f.NormChannel
 		groups[key] = append(groups[key], groupMember{film: f, order: order})
 	}
 
 	for _, members := range groups {
-		if len(members) < 2 || len(members) > 25 {
+		if len(members) < 2 || len(members) > 120 {
 			continue
 		}
 		sort.Slice(members, func(i, j int) bool {
@@ -439,12 +510,19 @@ func (c *Catalog) buildSeriesGroups() {
 			}
 			return members[i].film.Rank < members[j].film.Rank
 		})
-		filmSlice := make([]models.Film, len(members))
-		for i, m := range members {
-			filmSlice[i] = m.film
-		}
+		filmSlice := make([]models.Film, 0, len(members))
+		seenID := make(map[string]bool, len(members))
 		for _, m := range members {
-			c.SeriesByFilm[m.film.ID] = filmSlice
+			if !seenID[m.film.ID] {
+				seenID[m.film.ID] = true
+				filmSlice = append(filmSlice, m.film)
+			}
+		}
+		if len(filmSlice) < 2 {
+			continue
+		}
+		for _, m := range filmSlice {
+			c.SeriesByFilm[m.ID] = filmSlice
 		}
 	}
 }

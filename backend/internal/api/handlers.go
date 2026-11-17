@@ -89,7 +89,7 @@ func (h *Handler) GetHealth(w http.ResponseWriter, r *http.Request) {
 		"status":       "healthy",
 		"ok":           true,
 		"service":      "phimai",
-		"version":      "1.0.7",
+		"version":      "1.0.8",
 		"warpActive":   h.KVTube.IsWarpActive(),
 		"warpProxy":    h.KVTube.WarpProxyURL,
 		"totalFilms":   totalFilms,
@@ -237,6 +237,29 @@ func (h *Handler) GetFilmDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, detail)
+}
+
+func (h *Handler) DiscoverFilmEpisodes(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "missing film id"})
+		return
+	}
+	force := r.Method == http.MethodPost || r.URL.Query().Get("force") == "1"
+	ctx, cancel := context.WithTimeout(r.Context(), 18*time.Second)
+	defer cancel()
+
+	added, episodes := h.Catalog.DiscoverSeriesEpisodes(ctx, h.KVTube, id, force)
+	if episodes == nil {
+		episodes = []models.Film{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":       true,
+		"id":       id,
+		"added":    added,
+		"total":    len(episodes),
+		"episodes": episodes,
+	})
 }
 
 // ---------------------------------------------------------------------------

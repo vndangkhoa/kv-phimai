@@ -863,6 +863,11 @@ func (s *Service) GetVideo(ctx context.Context, videoID string, fallback *models
 		if aid, ok := raw["authorId"].(string); ok && aid != "" {
 			resp.AuthorID = aid
 		}
+		if d, ok := raw["description"].(string); ok && d != "" {
+			resp.Description = d
+		} else if dh, ok := raw["descriptionHtml"].(string); ok && dh != "" {
+			resp.Description = dh
+		}
 		if ls := toInt(raw["lengthSeconds"]); ls > 0 {
 			resp.LengthSeconds = ls
 		}

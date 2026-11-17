@@ -321,6 +321,155 @@ func (s *Service) FetchChannelLatestVideos(ctx context.Context, authorID string,
 	return out, nil
 }
 
+// FetchPlaylistVideos retrieves all videos inside a YouTube playlist ID (e.g. PL...) via InnerTube or Invidious.
+func (s *Service) FetchPlaylistVideos(ctx context.Context, playlistID string, defaultChannel string) ([]CrawledVideoItem, error) {
+	playlistID = strings.TrimSpace(playlistID)
+	if len(playlistID) < 8 {
+		return nil, fmt.Errorf("invalid playlistID")
+	}
+	if items, err := s.fetchPlaylistInnerTube(ctx, playlistID, defaultChannel); err == nil && len(items) > 0 {
+		return items, nil
+	}
+	return s.fetchPlaylistInvidious(ctx, playlistID, defaultChannel)
+}
+
+func (s *Service) fetchPlaylistInnerTube(ctx context.Context, playlistID string, defaultChannel string) ([]CrawledVideoItem, error) {
+	payload := map[string]interface{}{
+		"context": map[string]interface{}{
+			"client": map[string]interface{}{
+				"clientName":    "WEB",
+				"clientVersion": "2.20250317.01.00",
+				"hl":            "vi",
+				"gl":            "VN",
+			},
+		},
+		"browseId": "VL" + playlistID,
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+	resp, err := s.doRequest(req, false, bodyBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("playlist browse status %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return nil, err
+	}
+	var root map[string]interface{}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return nil, err
+	}
+	var out []CrawledVideoItem
+	seen := make(map[string]bool)
+	extractPlaylistRenderers(root, defaultChannel, &out, seen)
+	return out, nil
+}
+
+func extractPlaylistRenderers(node interface{}, defaultChannel string, out *[]CrawledVideoItem, seen map[string]bool) {
+	switch val := node.(type) {
+	case map[string]interface{}:
+		if pr, ok := val["playlistVideoRenderer"].(map[string]interface{}); ok {
+			id, _ := pr["videoId"].(string)
+			title := extractSimpleOrRunsText(pr["title"])
+			if id != "" && title != "" && !seen[id] {
+				seen[id] = true
+				ch := extractSimpleOrRunsText(pr["shortBylineText"])
+				if ch == "" {
+					ch = defaultChannel
+				}
+				durSec := toInt(pr["lengthSeconds"])
+				if durSec == 0 {
+					durSec = parseClockDuration(extractSimpleOrRunsText(pr["lengthText"]))
+				}
+				*out = append(*out, CrawledVideoItem{
+					VideoID:       strings.TrimSpace(id),
+					Title:         strings.TrimSpace(title),
+					Channel:       strings.TrimSpace(ch),
+					AuthorID:      extractBrowseID(pr["shortBylineText"]),
+					LengthSeconds: durSec,
+				})
+			}
+			return
+		}
+		for _, v := range val {
+			extractPlaylistRenderers(v, defaultChannel, out, seen)
+		}
+	case []interface{}:
+		for _, elem := range val {
+			extractPlaylistRenderers(elem, defaultChannel, out, seen)
+		}
+	}
+}
+
+func (s *Service) fetchPlaylistInvidious(ctx context.Context, playlistID string, defaultChannel string) ([]CrawledVideoItem, error) {
+	apiURL := fmt.Sprintf("%s/api/v1/playlists/%s", s.UpstreamRoot, url.PathEscape(playlistID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PhimAI/2.0")
+	resp, err := s.doRequest(req, false, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("invidious playlist status %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return nil, err
+	}
+	var pl struct {
+		Author string                   `json:"author"`
+		Videos []map[string]interface{} `json:"videos"`
+	}
+	if err := json.Unmarshal(raw, &pl); err != nil {
+		return nil, err
+	}
+	out := make([]CrawledVideoItem, 0, len(pl.Videos))
+	for _, entry := range pl.Videos {
+		id, _ := entry["videoId"].(string)
+		title, _ := entry["title"].(string)
+		if id == "" || title == "" {
+			continue
+		}
+		ch, _ := entry["author"].(string)
+		if ch == "" {
+			ch = pl.Author
+		}
+		if ch == "" {
+			ch = defaultChannel
+		}
+		out = append(out, CrawledVideoItem{
+			VideoID:       strings.TrimSpace(id),
+			Title:         strings.TrimSpace(title),
+			Channel:       strings.TrimSpace(ch),
+			AuthorID:      fmt.Sprintf("%v", entry["authorId"]),
+			LengthSeconds: toInt(entry["lengthSeconds"]),
+			ViewCount:     toInt64(entry["viewCount"]),
+		})
+	}
+	return out, nil
+}
+
 func extractSimpleOrRunsText(v interface{}) string {
 	m, ok := v.(map[string]interface{})
 	if !ok {

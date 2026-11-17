@@ -13,6 +13,8 @@ import {
   CAT_LABEL,
   GENRE_GROUPS,
   genreMatch,
+  getEpisodeInfo,
+  getSeriesEpisodes,
   viewsNumber,
 } from './utils/phimaiUtils';
 
@@ -548,17 +550,81 @@ export function App() {
     [activeFilm, filteredFilms]
   );
 
+  const activeSeriesEpisodes = useMemo(
+    () => (activeFilm ? getSeriesEpisodes(activeFilm, allFilms) : []),
+    [activeFilm, allFilms]
+  );
+
+  const fetchedSeriesIdsRef = useRef<Set<string>>(new Set());
+
+  // Automatically discover missing episodes for episodic movies currently being watched
+  useEffect(() => {
+    if (routeView !== 'watch' || !activeFilm) return;
+    const epInfo = getEpisodeInfo(activeFilm.title, activeFilm.channel);
+    if (epInfo.epNum === null && activeSeriesEpisodes.length < 2) return;
+    const seriesCacheKey = epInfo.baseKey ? `${epInfo.baseKey}||${activeFilm.channel}` : activeFilm.id;
+    if (fetchedSeriesIdsRef.current.has(seriesCacheKey)) return;
+    fetchedSeriesIdsRef.current.add(seriesCacheKey);
+
+    let cancelled = false;
+    fetch(`/api/films/${encodeURIComponent(activeFilm.id)}/episodes`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.ok && Array.isArray(data.episodes) && data.episodes.length > 0) {
+          mergeFilmsIntoCatalog(data.episodes as Film[]);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [routeView, activeFilm?.id, activeFilm?.title, activeFilm?.channel, activeSeriesEpisodes.length, mergeFilmsIntoCatalog]);
+
   const handleNextFilm = useCallback(() => {
+    if (!activeFilm) return;
+    // 1. Always play the next sequential episode of the same movie (Tập 1 -> Tập 2 -> Tập 3...)
+    if (activeSeriesEpisodes.length > 1) {
+      const epIdx = activeSeriesEpisodes.findIndex((e) => e.id === activeFilm.id);
+      if (epIdx >= 0 && epIdx + 1 < activeSeriesEpisodes.length) {
+        const nextEp = activeSeriesEpisodes[epIdx + 1];
+        try {
+          localStorage.removeItem(`phimai_pos_${nextEp.id}`);
+        } catch {
+          // ignore
+        }
+        handleOpenWatch(nextEp, 0);
+        return;
+      }
+    }
+
+    // 2. After finishing the last episode (or on standalone films), advance to the next different film
     if (filteredFilms.length === 0) return;
-    const nextIdx = currentFilmIndex >= 0 ? (currentFilmIndex + 1) % filteredFilms.length : 0;
-    handleOpenWatch(filteredFilms[nextIdx]);
-  }, [filteredFilms, currentFilmIndex, handleOpenWatch]);
+    const sameSeriesIds = new Set(activeSeriesEpisodes.map((e) => e.id));
+    const startIdx = currentFilmIndex >= 0 ? currentFilmIndex : -1;
+    for (let offset = 1; offset <= filteredFilms.length; offset++) {
+      const cand = filteredFilms[(startIdx + offset) % filteredFilms.length];
+      if (cand.id !== activeFilm.id && !sameSeriesIds.has(cand.id)) {
+        handleOpenWatch(cand, 0);
+        return;
+      }
+    }
+  }, [activeFilm, activeSeriesEpisodes, filteredFilms, currentFilmIndex, handleOpenWatch]);
 
   const handlePrevFilm = useCallback(() => {
+    if (!activeFilm) return;
+    if (activeSeriesEpisodes.length > 1) {
+      const epIdx = activeSeriesEpisodes.findIndex((e) => e.id === activeFilm.id);
+      if (epIdx > 0) {
+        const prevEp = activeSeriesEpisodes[epIdx - 1];
+        handleOpenWatch(prevEp, 0);
+        return;
+      }
+    }
     if (filteredFilms.length === 0) return;
     const prevIdx = currentFilmIndex > 0 ? currentFilmIndex - 1 : filteredFilms.length - 1;
-    handleOpenWatch(filteredFilms[prevIdx]);
-  }, [filteredFilms, currentFilmIndex, handleOpenWatch]);
+    handleOpenWatch(filteredFilms[prevIdx], 0);
+  }, [activeFilm, activeSeriesEpisodes, filteredFilms, currentFilmIndex, handleOpenWatch]);
 
   const isWatchMode = routeView === 'watch' && Boolean(activeFilm);
 
@@ -625,6 +691,7 @@ export function App() {
             }}
             onSeekToSec={(sec) => setExternalSeekSec({ sec, nonce: Date.now() })}
             onRateSuccess={(id, nextRating) => setRatings((prev) => ({ ...prev, [id]: nextRating }))}
+            onMergeFilms={mergeFilmsIntoCatalog}
           />
         ) : routeView === 'channels' ? (
           <ChannelsDirectoryPage
