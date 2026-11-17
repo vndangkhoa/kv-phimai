@@ -8,12 +8,15 @@ import {
   IoBookmarkOutline,
   IoTime,
   IoTimeOutline,
+  IoTv,
+  IoTvOutline,
 } from 'react-icons/io5';
 
 interface MobileNavProps {
-  activeView: 'home' | 'watch';
+  activeView: 'home' | 'watch' | 'channels' | 'channel';
   activeSort: string;
   onSelectHome: () => void;
+  onSelectChannels: () => void;
   onSelectHot: () => void;
   onSelectSaved: () => void;
   onSelectHistory: () => void;
@@ -23,6 +26,7 @@ export function MobileNav({
   activeView,
   activeSort,
   onSelectHome,
+  onSelectChannels,
   onSelectHot,
   onSelectSaved,
   onSelectHistory,
@@ -30,6 +34,7 @@ export function MobileNav({
   if (activeView === 'watch') return null;
 
   const isHome = activeView === 'home' && activeSort !== 'hot' && activeSort !== 'saved' && activeSort !== 'history';
+  const isChannels = activeView === 'channels' || activeView === 'channel';
   const isHot = activeView === 'home' && activeSort === 'hot';
   const isSaved = activeView === 'home' && activeSort === 'saved';
   const isHistory = activeView === 'home' && activeSort === 'history';
@@ -41,6 +46,13 @@ export function MobileNav({
       active: isHome,
       onClick: onSelectHome,
       icon: isHome ? <IoHome size={20} /> : <IoHomeOutline size={20} />,
+    },
+    {
+      id: 'channels',
+      label: 'Kênh',
+      active: isChannels,
+      onClick: onSelectChannels,
+      icon: isChannels ? <IoTv size={20} /> : <IoTvOutline size={20} />,
     },
     {
       id: 'hot',

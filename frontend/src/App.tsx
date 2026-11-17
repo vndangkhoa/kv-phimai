@@ -6,6 +6,8 @@ import { Sidebar } from './components/Sidebar';
 import { MobileNav } from './components/MobileNav';
 import { VideoCard } from './components/VideoCard';
 import { WatchPage } from './components/WatchPage';
+import { ChannelPage } from './components/ChannelPage';
+import { ChannelsDirectoryPage } from './components/ChannelsDirectoryPage';
 import { PersistentPlayer } from './components/PersistentPlayer';
 import {
   CAT_LABEL,
@@ -13,7 +15,6 @@ import {
   genreMatch,
   viewsNumber,
 } from './utils/phimaiUtils';
-import { prefetchVideoStream } from './services/streamService';
 
 const DEFAULT_FILTERS: FilterState = {
   query: '',
@@ -66,7 +67,14 @@ const FALLBACK_SEED_FILMS: Film[] = [
   },
 ];
 
-function parseRouteFromLocation(): { view: 'home' | 'watch'; videoId: string; t: number; channel: string; query: string } {
+function parseRouteFromLocation(): {
+  view: 'home' | 'watch' | 'channels' | 'channel';
+  videoId: string;
+  t: number;
+  channelId: string;
+  channel: string;
+  query: string;
+} {
   const path = window.location.pathname || '/';
   const params = new URLSearchParams(window.location.search || '');
   const v = params.get('v') || '';
@@ -75,9 +83,24 @@ function parseRouteFromLocation(): { view: 'home' | 'watch'; videoId: string; t:
   const query = params.get('q') || '';
 
   if (path === '/watch' && v) {
-    return { view: 'watch', videoId: v, t, channel: '', query: '' };
+    return { view: 'watch', videoId: v, t, channelId: '', channel: '', query: '' };
   }
-  return { view: 'home', videoId: '', t: 0, channel, query };
+  if (path === '/channels') {
+    return { view: 'channels', videoId: '', t: 0, channelId: '', channel: '', query: '' };
+  }
+  if (path.startsWith('/channel/')) {
+    const seg = path.slice('/channel/'.length).replace(/\/+$/, '');
+    let decoded = seg;
+    try {
+      decoded = decodeURIComponent(seg);
+    } catch {
+      // ignore
+    }
+    if (decoded) {
+      return { view: 'channel', videoId: '', t: 0, channelId: decoded, channel: '', query: '' };
+    }
+  }
+  return { view: 'home', videoId: '', t: 0, channelId: '', channel, query };
 }
 
 export function App() {
@@ -92,7 +115,8 @@ export function App() {
     query: initialRoute.query,
   }));
 
-  const [routeView, setRouteView] = useState<'home' | 'watch'>(initialRoute.view);
+  const [routeView, setRouteView] = useState<'home' | 'watch' | 'channels' | 'channel'>(initialRoute.view);
+  const [channelRouteId, setChannelRouteId] = useState<string>(initialRoute.channelId);
   const [watchVideoId, setWatchVideoId] = useState<string>(initialRoute.videoId);
   const [watchInitialTime, setWatchInitialTime] = useState<number>(initialRoute.t);
   const [activeFilm, setActiveFilm] = useState<Film | null>(() => {
@@ -223,7 +247,6 @@ export function App() {
         if (!cancelled && initialRes.status === 'fulfilled' && initialRes.value?.items) {
           const items = initialRes.value.items as Film[];
           mergeFilmsIntoCatalog(items);
-          items.slice(0, 4).forEach((f) => prefetchVideoStream(f.id));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -286,6 +309,11 @@ export function App() {
         setWatchInitialTime(parsed.t);
         const found = allFilms.find((f) => f.id === parsed.videoId);
         if (found) setActiveFilm(found);
+      } else if (parsed.view === 'channels') {
+        setRouteView('channels');
+      } else if (parsed.view === 'channel' && parsed.channelId) {
+        setRouteView('channel');
+        setChannelRouteId(parsed.channelId);
       } else {
         setRouteView('home');
       }
@@ -319,7 +347,6 @@ export function App() {
       setWatchInitialTime(seekSec);
       setRouteView('watch');
       recordHistory(film.id);
-      prefetchVideoStream(film.id);
       const url = `/watch?v=${encodeURIComponent(film.id)}${seekSec > 0 ? `&t=${Math.floor(seekSec)}` : ''}`;
       if (`${window.location.pathname}${window.location.search}` !== url) {
         window.history.pushState({ view: 'watch', videoId: film.id }, '', url);
@@ -328,6 +355,27 @@ export function App() {
     },
     [recordHistory]
   );
+
+  const handleOpenChannel = useCallback((channelName: string) => {
+    if (!channelName) return;
+    setChannelRouteId(channelName);
+    setRouteView('channel');
+    if (window.innerWidth <= 1024) setIsSidebarOpen(false);
+    const url = `/channel/${encodeURIComponent(channelName)}`;
+    if (window.location.pathname !== url) {
+      window.history.pushState({ view: 'channel', channelId: channelName }, '', url);
+    }
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  }, []);
+
+  const handleOpenChannels = useCallback(() => {
+    setRouteView('channels');
+    if (window.innerWidth <= 1024) setIsSidebarOpen(false);
+    if (window.location.pathname !== '/channels') {
+      window.history.pushState({ view: 'channels' }, '', '/channels');
+    }
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  }, []);
 
   const handleGoHome = useCallback(() => {
     setRouteView('home');
@@ -487,10 +535,15 @@ export function App() {
         isOpen={isSidebarOpen}
         isOverlayMode={isWatchMode || isMobileViewport}
         onClose={() => setIsSidebarOpen(false)}
+        activeView={routeView}
+        activeChannelName={channelRouteId}
         filters={filters}
         categories={categories}
+        allFilms={allFilms}
         onSelectFilter={(patch) => setFilters(patch)}
         onGoHome={handleGoHome}
+        onOpenChannels={handleOpenChannels}
+        onOpenChannel={handleOpenChannel}
       />
 
       <main
@@ -511,6 +564,7 @@ export function App() {
             rating={ratings[activeFilm.id]}
             onToggleSave={toggleSave}
             onSelectFilm={(f) => handleOpenWatch(f)}
+            onOpenChannel={handleOpenChannel}
             onBackHome={handleGoHome}
             onFilterByPatch={(patch) => {
               setFilters(patch);
@@ -518,6 +572,22 @@ export function App() {
             }}
             onSeekToSec={(sec) => setExternalSeekSec({ sec, nonce: Date.now() })}
             onRateSuccess={(id, nextRating) => setRatings((prev) => ({ ...prev, [id]: nextRating }))}
+          />
+        ) : routeView === 'channels' ? (
+          <ChannelsDirectoryPage
+            onOpenChannel={handleOpenChannel}
+            onBackHome={handleGoHome}
+          />
+        ) : routeView === 'channel' && channelRouteId ? (
+          <ChannelPage
+            channelId={channelRouteId}
+            allFilms={allFilms}
+            savedIds={savedIds}
+            onToggleSave={toggleSave}
+            onOpenFilm={(f) => handleOpenWatch(f)}
+            onOpenChannel={handleOpenChannel}
+            onBackHome={handleGoHome}
+            onOpenDirectory={handleOpenChannels}
           />
         ) : (
           <div className="yt-home-grid-wrapper">
@@ -612,7 +682,7 @@ export function App() {
                       saved={savedIds.has(film.id)}
                       onToggleSave={toggleSave}
                       onOpenFilm={(f) => handleOpenWatch(f)}
-                      onFilterChannel={(ch) => setFilters({ channel: ch })}
+                      onFilterChannel={(ch) => handleOpenChannel(ch)}
                     />
                   ))}
                 </div>
@@ -634,12 +704,13 @@ export function App() {
       </main>
 
       <MobileNav
-        activeView={isWatchMode ? 'watch' : 'home'}
+        activeView={isWatchMode ? 'watch' : routeView}
         activeSort={filters.sort}
         onSelectHome={() => {
           setFilters(DEFAULT_FILTERS);
           handleGoHome();
         }}
+        onSelectChannels={handleOpenChannels}
         onSelectHot={() => {
           setFilters({ sort: 'hot' });
           handleGoHome();

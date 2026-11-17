@@ -91,6 +91,14 @@ export function MaterialiousPlayer({
   const lastTapRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
   const stallTimestampsRef = useRef<number[]>([]);
   const lastLoadedVideoIdRef = useRef<string>('');
+  const startupWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearStartupWatchdog = useCallback(() => {
+    if (startupWatchdogRef.current) {
+      clearTimeout(startupWatchdogRef.current);
+      startupWatchdogRef.current = null;
+    }
+  }, []);
 
   const [isPlaying, setIsPlaying] = useState(autoplay);
   const [currentTime, setCurrentTime] = useState(initialTimeSec > 0 ? initialTimeSec : 0);
@@ -214,8 +222,44 @@ export function MaterialiousPlayer({
           aud.play().catch(() => {});
         }
       }
+
+      // Guardrail: if high-res or adaptive direct stream fails to decode frames within 4.5s,
+      // automatically step down to resilient muxed MP4 progressive stream so playback never stalls.
+      clearStartupWatchdog();
+      if (!streamSrc.includes('itag=18')) {
+        startupWatchdogRef.current = setTimeout(() => {
+          const curVid = videoRef.current;
+          if (!curVid || playbackStartedRef.current || curVid.readyState >= 2) return;
+          const muxed =
+            vData.streams?.find((s) => s.url) ||
+            qualities.find((opt) => opt.hasAudio && opt.itag === '18');
+          const fallbackUrl =
+            muxed?.url && !muxed.url.includes(streamSrc)
+              ? proxySameOriginUrl(muxed.url)
+              : `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`;
+          console.warn('[PhimAI Player] Startup watchdog stepping down to muxed stream:', fallbackUrl);
+          setNeedsSeparateAudio(false);
+          setActiveHeight(360);
+          if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.removeAttribute('src');
+          }
+          curVid.muted = isMuted;
+          curVid.volume = volume;
+          curVid.src = fallbackUrl;
+          curVid.load();
+          if (targetTime > 0) {
+            try {
+              curVid.currentTime = targetTime;
+            } catch {
+              // ignore
+            }
+          }
+          if (autoplay) curVid.play().catch(() => {});
+        }, 4500);
+      }
     },
-    [videoId, autoplay, isMuted, volume, playbackRate]
+    [videoId, autoplay, isMuted, volume, playbackRate, clearStartupWatchdog, qualities]
   );
 
   // Main stream loader when videoId changes
@@ -247,6 +291,15 @@ export function MaterialiousPlayer({
         if (cancelled) return;
         if (!videoData) {
           throw new Error('Không lấy được luồng phát');
+        }
+        if (videoData.unavailable) {
+          clearStartupWatchdog();
+          setIsBuffering(false);
+          setErrorMsg(
+            videoData.unavailableReason ||
+              'Video gốc đã bị kênh chủ quản đặt riêng tư (Private) hoặc gỡ bỏ.'
+          );
+          return;
         }
         videoDataRef.current = videoData;
 
@@ -338,9 +391,10 @@ export function MaterialiousPlayer({
                   bufferingGoal: 14,
                   bufferBehind: 24,
                   retryParameters: {
-                    maxAttempts: 2,
-                    baseDelay: 300,
-                    backoffFactor: 1.4,
+                    maxAttempts: 1,
+                    baseDelay: 250,
+                    backoffFactor: 1.2,
+                    timeout: 3500,
                   },
                 },
               });
@@ -373,7 +427,12 @@ export function MaterialiousPlayer({
               player.addEventListener('variantchanged', updateActiveVariantHeight);
 
               const manifestUrl = dashManifest || hlsManifest;
-              await player.load(manifestUrl, resumePos > 0 ? resumePos : undefined);
+              await Promise.race([
+                player.load(manifestUrl, resumePos > 0 ? resumePos : undefined),
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error('Shaka manifest/segment timeout (3.5s)')), 3500)
+                ),
+              ]);
               if (cancelled) return;
 
               // Enforce minHeight 480p only if HD/480p+ variants actually exist in this video's manifest
@@ -435,10 +494,32 @@ export function MaterialiousPlayer({
                 vidEl.play().catch(() => {});
               }
               setIsBuffering(false);
+
+              // Verify Shaka actually decodes frames within 4s; otherwise drop to muxed MP4
+              clearStartupWatchdog();
+              startupWatchdogRef.current = setTimeout(async () => {
+                if (cancelled || playbackStartedRef.current || vidEl.readyState >= 2) return;
+                console.warn('[PhimAI Player] Shaka decoded-frame watchdog triggered -> switching to progressive MP4');
+                if (shakaPlayerRef.current) {
+                  await shakaPlayerRef.current.destroy().catch(() => {});
+                  shakaPlayerRef.current = null;
+                }
+                const muxed =
+                  qualList.find((q) => q.hasAudio && q.height >= 720) ||
+                  qualList.find((q) => q.hasAudio) || {
+                    id: '18',
+                    label: '360p',
+                    height: 360,
+                    itag: '18',
+                    url: `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`,
+                    hasAudio: true,
+                  };
+                attachDirectQuality(muxed, resumePos, videoData);
+              }, 4000);
               return;
             }
           } catch (shakaErr) {
-            console.warn('[PhimAI Player] Shaka ABR fallback to direct high-res stream:', shakaErr);
+            console.warn('[PhimAI Player] Shaka ABR fallback to direct stream:', shakaErr);
             if (shakaPlayerRef.current) {
               await shakaPlayerRef.current.destroy().catch(() => {});
               shakaPlayerRef.current = null;
@@ -448,9 +529,14 @@ export function MaterialiousPlayer({
 
         if (cancelled) return;
 
-        // 2. High-Resolution Adaptive Dual-Stream / Direct Progressive Playback
-        if (bestInitial) {
-          attachDirectQuality(bestInitial, resumePos, videoData);
+        // 2. If DASH timed out or failed, prefer a muxed progressive stream (fast start + guaranteed audio)
+        // or highest playable quality with 4.5s watchdog protection
+        const muxedFallback =
+          qualList.find((q) => q.hasAudio && q.height >= 720) ||
+          qualList.find((q) => q.hasAudio) ||
+          bestInitial;
+        if (muxedFallback) {
+          attachDirectQuality(muxedFallback, resumePos, videoData);
           return;
         }
 
@@ -495,6 +581,7 @@ export function MaterialiousPlayer({
 
     return () => {
       cancelled = true;
+      clearStartupWatchdog();
       if (shakaPlayerRef.current) {
         shakaPlayerRef.current.destroy().catch(() => {});
         shakaPlayerRef.current = null;
@@ -623,6 +710,7 @@ export function MaterialiousPlayer({
     };
 
     const onPlaying = () => {
+      clearStartupWatchdog();
       playbackStartedRef.current = true;
       setIsBuffering(false);
       setDataLoaded(true);
@@ -635,6 +723,7 @@ export function MaterialiousPlayer({
     };
 
     const onCanPlay = () => {
+      clearStartupWatchdog();
       setIsBuffering(false);
       setDataLoaded(true);
     };
@@ -653,18 +742,19 @@ export function MaterialiousPlayer({
       // If high-res adaptive stream fails cleanly, step down to progressive stream
       if (!usingProgressiveRef.current && shakaPlayerRef.current) return;
       if (usingProgressiveRef.current && !playbackStartedRef.current) {
-        const progFallback =
-          qualities.find((q) => q.hasAudio && q.height < activeHeight) ||
-          qualities.find((q) => q.hasAudio) || {
-            id: '18',
-            label: '360p',
-            height: 360,
-            itag: '18',
-            url: `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`,
-            hasAudio: true,
-          };
-        if (progFallback && !vid.src.includes('itag=18')) {
-          attachDirectQuality(progFallback, vid.currentTime);
+        const latestFallbackUrl = `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`;
+        if (!vid.src.includes('latest_version')) {
+          attachDirectQuality(
+            {
+              id: '18',
+              label: '360p',
+              height: 360,
+              itag: '18',
+              url: latestFallbackUrl,
+              hasAudio: true,
+            },
+            vid.currentTime
+          );
           return;
         }
       }
@@ -681,6 +771,7 @@ export function MaterialiousPlayer({
     vid.addEventListener('waiting', onWaiting);
     vid.addEventListener('playing', onPlaying);
     vid.addEventListener('canplay', onCanPlay);
+    vid.addEventListener('loadeddata', onCanPlay);
     vid.addEventListener('ended', onEnded);
     vid.addEventListener('error', onVideoError);
 
@@ -692,6 +783,7 @@ export function MaterialiousPlayer({
       vid.removeEventListener('waiting', onWaiting);
       vid.removeEventListener('playing', onPlaying);
       vid.removeEventListener('canplay', onCanPlay);
+      vid.removeEventListener('loadeddata', onCanPlay);
       vid.removeEventListener('ended', onEnded);
       vid.removeEventListener('error', onVideoError);
     };
@@ -1225,29 +1317,48 @@ export function MaterialiousPlayer({
                 textAlign: 'center',
               }}
             >
-              <p style={{ color: '#fff', margin: 0, fontSize: '14px' }}>{errorMsg}</p>
-              <button
-                type="button"
-                onClick={() => {
-                  lastLoadedVideoIdRef.current = '';
-                  setErrorMsg(null);
-                  setIsBuffering(true);
-                  const ev = new CustomEvent('phimai-retry-stream');
-                  window.dispatchEvent(ev);
-                  window.location.reload();
-                }}
-                style={{
-                  padding: '8px 18px',
-                  borderRadius: '20px',
-                  border: 'none',
-                  backgroundColor: '#ff0033',
-                  color: '#fff',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >
-                Thử phát lại
-              </button>
+              <p style={{ color: '#fff', margin: 0, fontSize: '14px', maxWidth: '460px', lineHeight: 1.5 }}>{errorMsg}</p>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    lastLoadedVideoIdRef.current = '';
+                    setErrorMsg(null);
+                    setIsBuffering(true);
+                    const ev = new CustomEvent('phimai-retry-stream');
+                    window.dispatchEvent(ev);
+                    window.location.reload();
+                  }}
+                  style={{
+                    padding: '8px 18px',
+                    borderRadius: '20px',
+                    border: 'none',
+                    backgroundColor: '#ff0033',
+                    color: '#fff',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Thử phát lại
+                </button>
+                {onNext && (
+                  <button
+                    type="button"
+                    onClick={onNext}
+                    style={{
+                      padding: '8px 18px',
+                      borderRadius: '20px',
+                      border: '1px solid rgba(255,255,255,0.28)',
+                      backgroundColor: 'rgba(255,255,255,0.12)',
+                      color: '#fff',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Chuyển sang phim tiếp theo
+                  </button>
+                )}
+              </div>
             </div>
           )}
 

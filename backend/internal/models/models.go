@@ -87,11 +87,13 @@ type KVTubeVideoResponse struct {
 	BestAudioURL    string                   `json:"bestAudioUrl,omitempty"`
 	HlsURL          string                   `json:"hlsUrl,omitempty"`
 	DashURL         string                   `json:"dashUrl,omitempty"`
-	Streams         []KVTubeStreamItem       `json:"streams"`
-	FormatStreams   []map[string]interface{} `json:"formatStreams,omitempty"`
-	AdaptiveFormats []map[string]interface{} `json:"adaptiveFormats,omitempty"`
-	Captions        []KVTubeCaption          `json:"captions"`
-	Film            *Film                    `json:"film,omitempty"`
+	Streams           []KVTubeStreamItem       `json:"streams"`
+	FormatStreams     []map[string]interface{} `json:"formatStreams,omitempty"`
+	AdaptiveFormats   []map[string]interface{} `json:"adaptiveFormats,omitempty"`
+	Captions          []KVTubeCaption          `json:"captions"`
+	Unavailable       bool                     `json:"unavailable,omitempty"`
+	UnavailableReason string                   `json:"unavailableReason,omitempty"`
+	Film              *Film                    `json:"film,omitempty"`
 	Series          []Film                   `json:"series,omitempty"`
 	Related         []Film                   `json:"related,omitempty"`
 }

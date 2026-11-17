@@ -169,7 +169,7 @@ func (c *Catalog) enrichFilm(f *models.Film) {
 	f.EmbedURL = "/watch?v=" + f.ID
 	f.StreamURL = "/api/invidious/latest_version?id=" + f.ID + "&itag=18&local=true"
 	if f.Channel != "" {
-		f.ChannelURL = "/?channel=" + url.QueryEscape(f.Channel)
+		f.ChannelURL = "/channel/" + url.PathEscape(f.Channel)
 	}
 	f.ViewsNum = parseViewsNum(f.Views)
 	f.DurMins = parseDurMinutes(f.Dur, f.Cat)
@@ -199,6 +199,18 @@ func (c *Catalog) loadAll() {
 				c.ChannelIDs[k] = v
 			}
 			c.Playlists = extra.Playlists
+		}
+	}
+
+	// 1b. Load dead-runtime.json (videos discovered at runtime to be Private/404)
+	if raw, err := os.ReadFile(filepath.Join(c.DataDir, "dead-runtime.json")); err == nil {
+		var deadList []string
+		if json.Unmarshal(raw, &deadList) == nil {
+			for _, id := range deadList {
+				if id != "" {
+					c.DeadIDs[id] = true
+				}
+			}
 		}
 	}
 
@@ -774,6 +786,371 @@ func (c *Catalog) QueryFilms(p FilterParams, hotCounts map[string]int, ratings m
 		out[i] = m.film
 	}
 	return paginate(out, p.Page, p.Limit), len(out)
+}
+
+type ChannelInfo struct {
+	Name         string        `json:"name"`
+	AuthorID     string        `json:"authorId,omitempty"`
+	Count        int           `json:"count"`
+	TotalViews   int64         `json:"totalViews"`
+	FullCount    int           `json:"fullCount"`
+	Thumbnail    string        `json:"thumbnail"`
+	Banner       string        `json:"banner"`
+	Categories   []string      `json:"categories"`
+	URL          string        `json:"url"`
+	PreviewFilms []models.Film `json:"previewFilms,omitempty"`
+}
+
+type ChannelPlaylist struct {
+	ID        string        `json:"id"`
+	Title     string        `json:"title"`
+	Count     int           `json:"count"`
+	Thumbnail string        `json:"thumbnail"`
+	Films     []models.Film `json:"films"`
+}
+
+type ChannelDetail struct {
+	ChannelInfo
+	Description  string            `json:"description,omitempty"`
+	SubCount     int64             `json:"subCount,omitempty"`
+	AvatarURL    string            `json:"avatarUrl,omitempty"`
+	BannerURL    string            `json:"bannerUrl,omitempty"`
+	Films        []models.Film     `json:"films"`
+	Playlists    []ChannelPlaylist `json:"playlists"`
+	TotalMatched int               `json:"totalMatched"`
+}
+
+// ListChannels returns aggregated channel statistics across the full catalog.
+func (c *Catalog) ListChannels(search string, sortBy string) []ChannelInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	type chanAgg struct {
+		name      string
+		films     []models.Film
+		views     int64
+		fullCount int
+		catsMap   map[string]int
+	}
+
+	aggs := make(map[string]*chanAgg)
+	for _, f := range c.Films {
+		if c.DeadIDs[f.ID] || f.Channel == "" {
+			continue
+		}
+		a, ok := aggs[f.Channel]
+		if !ok {
+			a = &chanAgg{
+				name:    f.Channel,
+				catsMap: make(map[string]int),
+			}
+			aggs[f.Channel] = a
+		}
+		a.films = append(a.films, f)
+		a.views += f.ViewsNum
+		if f.IsFull {
+			a.fullCount++
+		}
+		if f.Cat != "" {
+			a.catsMap[f.Cat]++
+		}
+	}
+
+	qNorm := ViNorm(search)
+	list := make([]ChannelInfo, 0, len(aggs))
+	for _, a := range aggs {
+		if qNorm != "" && !strings.Contains(ViNorm(a.name), qNorm) {
+			continue
+		}
+		// Sort channel films by ViewsNum DESC for banner + preview thumbnails
+		byViews := make([]models.Film, len(a.films))
+		copy(byViews, a.films)
+		sort.Slice(byViews, func(i, j int) bool {
+			if byViews[i].ViewsNum != byViews[j].ViewsNum {
+				return byViews[i].ViewsNum > byViews[j].ViewsNum
+			}
+			return byViews[i].Rank > byViews[j].Rank
+		})
+
+		type catCnt struct {
+			cat string
+			cnt int
+		}
+		var cc []catCnt
+		for k, v := range a.catsMap {
+			cc = append(cc, catCnt{cat: k, cnt: v})
+		}
+		sort.Slice(cc, func(i, j int) bool { return cc[i].cnt > cc[j].cnt })
+		cats := make([]string, 0, 4)
+		for i := 0; i < len(cc) && i < 4; i++ {
+			cats = append(cats, cc[i].cat)
+		}
+
+		thumb := ""
+		banner := ""
+		previewCount := 4
+		if len(byViews) < previewCount {
+			previewCount = len(byViews)
+		}
+		if len(byViews) > 0 {
+			thumb = "/api/kvtube/thumb/" + byViews[0].ID
+			banner = "/api/kvtube/thumb/" + byViews[0].ID + "?q=maxresdefault"
+		}
+
+		list = append(list, ChannelInfo{
+			Name:         a.name,
+			AuthorID:     c.ChannelIDs[a.name],
+			Count:        len(a.films),
+			TotalViews:   a.views,
+			FullCount:    a.fullCount,
+			Thumbnail:    thumb,
+			Banner:       banner,
+			Categories:   cats,
+			URL:          "/channel/" + url.PathEscape(a.name),
+			PreviewFilms: byViews[:previewCount],
+		})
+	}
+
+	switch strings.ToLower(sortBy) {
+	case "count":
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].Count != list[j].Count {
+				return list[i].Count > list[j].Count
+			}
+			return list[i].TotalViews > list[j].TotalViews
+		})
+	case "name":
+		sort.Slice(list, func(i, j int) bool {
+			return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
+		})
+	default: // "popular" or default weighted
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].TotalViews != list[j].TotalViews {
+				return list[i].TotalViews > list[j].TotalViews
+			}
+			return list[i].Count > list[j].Count
+		})
+	}
+
+	return list
+}
+
+// GetChannelDetail resolves a channel by name or YouTube authorId and returns films, playlists, and metadata.
+func (c *Catalog) GetChannelDetail(idOrName string, sortBy string, tab string, search string) *ChannelDetail {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	target := strings.TrimSpace(idOrName)
+	if unesc, err := url.PathUnescape(target); err == nil && unesc != "" {
+		target = unesc
+	}
+	if target == "" {
+		return nil
+	}
+
+	// Check if target is an AuthorID (UC...)
+	resolvedName := ""
+	for chName, aid := range c.ChannelIDs {
+		if strings.EqualFold(aid, target) || strings.EqualFold(chName, target) {
+			resolvedName = chName
+			break
+		}
+	}
+
+	targetNorm := ViNorm(target)
+	if resolvedName == "" {
+		for _, f := range c.Films {
+			if f.Channel != "" && (strings.EqualFold(f.Channel, target) || (targetNorm != "" && f.NormChannel == targetNorm)) {
+				resolvedName = f.Channel
+				break
+			}
+		}
+	}
+	if resolvedName == "" {
+		for _, f := range c.Films {
+			if f.Channel != "" && targetNorm != "" && strings.Contains(f.NormChannel, targetNorm) {
+				resolvedName = f.Channel
+				break
+			}
+		}
+	}
+
+	if resolvedName == "" {
+		return nil
+	}
+
+	var allChFilms []models.Film
+	var totalViews int64
+	fullCount := 0
+	catsMap := make(map[string]int)
+	for _, f := range c.Films {
+		if c.DeadIDs[f.ID] || f.Channel != resolvedName {
+			continue
+		}
+		allChFilms = append(allChFilms, f)
+		totalViews += f.ViewsNum
+		if f.IsFull {
+			fullCount++
+		}
+		if f.Cat != "" {
+			catsMap[f.Cat]++
+		}
+	}
+	if len(allChFilms) == 0 {
+		return nil
+	}
+
+	// Sort a copy by views to determine hero thumbnail/banner
+	byViews := make([]models.Film, len(allChFilms))
+	copy(byViews, allChFilms)
+	sort.Slice(byViews, func(i, j int) bool {
+		if byViews[i].ViewsNum != byViews[j].ViewsNum {
+			return byViews[i].ViewsNum > byViews[j].ViewsNum
+		}
+		return byViews[i].Rank > byViews[j].Rank
+	})
+
+	type catCnt struct {
+		cat string
+		cnt int
+	}
+	var cc []catCnt
+	for k, v := range catsMap {
+		cc = append(cc, catCnt{cat: k, cnt: v})
+	}
+	sort.Slice(cc, func(i, j int) bool { return cc[i].cnt > cc[j].cnt })
+	cats := make([]string, 0, len(cc))
+	for _, item := range cc {
+		cats = append(cats, item.cat)
+	}
+
+	// Filter films by active tab and search query
+	qNorm := ViNorm(search)
+	var filtered []models.Film
+	for _, f := range allChFilms {
+		if tab == "full" && !f.IsFull && f.DurMins < 45 {
+			continue
+		}
+		if qNorm != "" && !strings.Contains(f.NormSearch, qNorm) && !strings.Contains(f.NormTitle, qNorm) {
+			continue
+		}
+		filtered = append(filtered, f)
+	}
+
+	switch strings.ToLower(sortBy) {
+	case "popular", "topview":
+		sort.Slice(filtered, func(i, j int) bool {
+			if filtered[i].ViewsNum != filtered[j].ViewsNum {
+				return filtered[i].ViewsNum > filtered[j].ViewsNum
+			}
+			return filtered[i].Rank > filtered[j].Rank
+		})
+	case "oldest":
+		sort.Slice(filtered, func(i, j int) bool {
+			return filtered[i].Rank < filtered[j].Rank
+		})
+	default: // "newest"
+		sort.Slice(filtered, func(i, j int) bool {
+			return filtered[i].Rank > filtered[j].Rank
+		})
+	}
+
+	// Build channel Playlists from category groupings and multi-part series
+	var playlists []ChannelPlaylist
+	seenSeries := make(map[string]bool)
+	for _, f := range allChFilms {
+		eps, exists := c.SeriesByFilm[f.ID]
+		if !exists || len(eps) < 2 {
+			continue
+		}
+		sig := eps[0].ID
+		if seenSeries[sig] {
+			continue
+		}
+		seenSeries[sig] = true
+		playlists = append(playlists, ChannelPlaylist{
+			ID:        "series_" + sig,
+			Title:     eps[0].Title,
+			Count:     len(eps),
+			Thumbnail: "/api/kvtube/thumb/" + eps[0].ID,
+			Films:     eps,
+		})
+		if len(playlists) >= 12 {
+			break
+		}
+	}
+	if len(playlists) < 4 {
+		catGroup := make(map[string][]models.Film)
+		for _, f := range allChFilms {
+			catKey := f.Cat
+			if catKey == "" {
+				catKey = "other"
+			}
+			catGroup[catKey] = append(catGroup[catKey], f)
+		}
+		for catKey, grp := range catGroup {
+			if len(grp) < 2 {
+				continue
+			}
+			playlists = append(playlists, ChannelPlaylist{
+				ID:        "cat_" + catKey,
+				Title:     "Tuyển tập " + strings.ToUpper(catKey),
+				Count:     len(grp),
+				Thumbnail: "/api/kvtube/thumb/" + grp[0].ID,
+				Films:     grp,
+			})
+		}
+	}
+
+	return &ChannelDetail{
+		ChannelInfo: ChannelInfo{
+			Name:       resolvedName,
+			AuthorID:   c.ChannelIDs[resolvedName],
+			Count:      len(allChFilms),
+			TotalViews: totalViews,
+			FullCount:  fullCount,
+			Thumbnail:  "/api/kvtube/thumb/" + byViews[0].ID,
+			Banner:     "/api/kvtube/thumb/" + byViews[0].ID + "?q=maxresdefault",
+			Categories: cats,
+			URL:        "/channel/" + url.PathEscape(resolvedName),
+		},
+		Films:        filtered,
+		Playlists:    playlists,
+		TotalMatched: len(filtered),
+	}
+}
+
+// MarkDead records a video ID discovered at runtime to be private/removed and persists it to dead-runtime.json.
+func (c *Catalog) MarkDead(id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.DeadIDs[id] {
+		return
+	}
+	c.DeadIDs[id] = true
+
+	runtimePath := filepath.Join(c.DataDir, "dead-runtime.json")
+	var list []string
+	if raw, err := os.ReadFile(runtimePath); err == nil {
+		_ = json.Unmarshal(raw, &list)
+	}
+	found := false
+	for _, x := range list {
+		if x == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		list = append(list, id)
+		if b, err := json.Marshal(list); err == nil {
+			_ = os.WriteFile(runtimePath, b, 0644)
+		}
+	}
 }
 
 func paginate(items []models.Film, page, limit int) []models.Film {

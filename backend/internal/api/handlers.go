@@ -1,13 +1,13 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,7 +93,9 @@ func (h *Handler) GetHealth(w http.ResponseWriter, r *http.Request) {
 		"status":     "healthy",
 		"ok":         true,
 		"service":    "phimai",
-		"version":    "1.0.2",
+		"version":    "1.0.4",
+		"warpActive": h.KVTube.IsWarpActive(),
+		"warpProxy":  h.KVTube.WarpProxyURL,
 		"totalFilms": len(h.Catalog.Films),
 		"liveFilms":  liveTotal,
 	})
@@ -1296,31 +1298,100 @@ func (h *Handler) PostContact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetChannels(w http.ResponseWriter, r *http.Request) {
-	type chanStat struct {
-		Name  string `json:"name"`
-		Count int    `json:"count"`
-		ID    string `json:"authorId,omitempty"`
-		URL   string `json:"url"`
-	}
-	counts := make(map[string]int)
-	for _, f := range h.Catalog.Films {
-		if !h.Catalog.DeadIDs[f.ID] && f.Channel != "" {
-			counts[f.Channel]++
-		}
-	}
-	list := make([]chanStat, 0, len(counts))
-	for name, cnt := range counts {
-		cid := h.Catalog.ChannelIDs[name]
-		u := "/?channel=" + url.QueryEscape(name)
-		list = append(list, chanStat{Name: name, Count: cnt, ID: cid, URL: u})
-	}
-	sort.Slice(list, func(i, j int) bool {
-		return list[i].Count > list[j].Count
-	})
-	if len(list) > 100 {
-		list = list[:100]
-	}
+	q := r.URL.Query().Get("q")
+	sortBy := r.URL.Query().Get("sort")
+	list := h.Catalog.ListChannels(q, sortBy)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"items": list,
+		"total": len(list),
 	})
+}
+
+func (h *Handler) GetChannelDetail(w http.ResponseWriter, r *http.Request) {
+	rawID := chi.URLParam(r, "id")
+	if rawID == "" {
+		rawID = chi.URLParam(r, "*")
+	}
+	if rawID == "" {
+		rawID = r.URL.Query().Get("id")
+	}
+	if unesc, err := url.PathUnescape(rawID); err == nil && unesc != "" {
+		rawID = unesc
+	}
+	rawID = strings.TrimSpace(rawID)
+	if rawID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": "missing channel id or name"})
+		return
+	}
+
+	sortBy := r.URL.Query().Get("sort")
+	tab := r.URL.Query().Get("tab")
+	search := r.URL.Query().Get("q")
+
+	detail := h.Catalog.GetChannelDetail(rawID, sortBy, tab, search)
+
+	// Optionally enrich with live Invidious channel metadata (avatar, banner, subCount, description)
+	authorID := rawID
+	if detail != nil && detail.AuthorID != "" {
+		authorID = detail.AuthorID
+	}
+	if strings.HasPrefix(authorID, "UC") {
+		ctx, cancel := context.WithTimeout(r.Context(), 2800*time.Millisecond)
+		up, err := h.KVTube.GetChannelUpstream(ctx, authorID)
+		cancel()
+		if err == nil && up != nil {
+			if detail == nil {
+				name, _ := up["author"].(string)
+				if name == "" {
+					name = authorID
+				}
+				detail = &catalog.ChannelDetail{
+					ChannelInfo: catalog.ChannelInfo{
+						Name:       name,
+						AuthorID:   authorID,
+						Categories: []string{},
+						URL:        "/channel/" + url.PathEscape(authorID),
+					},
+					Films:     []models.Film{},
+					Playlists: []catalog.ChannelPlaylist{},
+				}
+			}
+			if desc, ok := up["description"].(string); ok && desc != "" {
+				detail.Description = desc
+			}
+			if sc, ok := up["subCount"].(float64); ok && int64(sc) > 0 {
+				detail.SubCount = int64(sc)
+			}
+			if tv, ok := up["totalViews"].(float64); ok && int64(tv) > detail.TotalViews {
+				detail.TotalViews = int64(tv)
+			}
+			if thumbs, ok := up["authorThumbnails"].([]interface{}); ok && len(thumbs) > 0 {
+				if last, ok := thumbs[len(thumbs)-1].(map[string]interface{}); ok {
+					if uStr, ok := last["url"].(string); ok && uStr != "" {
+						if strings.HasPrefix(uStr, "//") {
+							uStr = "https:" + uStr
+						}
+						detail.AvatarURL = uStr
+					}
+				}
+			}
+			if banners, ok := up["authorBanners"].([]interface{}); ok && len(banners) > 0 {
+				if last, ok := banners[len(banners)-1].(map[string]interface{}); ok {
+					if uStr, ok := last["url"].(string); ok && uStr != "" {
+						if strings.HasPrefix(uStr, "//") {
+							uStr = "https:" + uStr
+						}
+						detail.BannerURL = uStr
+					}
+				}
+			}
+		}
+	}
+
+	if detail == nil {
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{"error": "channel not found", "id": rawID})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, detail)
 }

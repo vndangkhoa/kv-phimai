@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -38,10 +39,15 @@ type inflightCall struct {
 }
 
 type Service struct {
-	BaseURL      string
-	UpstreamRoot string
-	apiClient    *http.Client
-	streamClient *http.Client
+	BaseURL          string
+	UpstreamRoot     string
+	WarpProxyURL     string
+	warpHostPort     string
+	OnDeadVideo      func(videoID string)
+	apiClient        *http.Client
+	streamClient     *http.Client
+	warpAPIClient    *http.Client
+	warpStreamClient *http.Client
 
 	mu           sync.RWMutex
 	videoCache   map[string]cachedVideo
@@ -49,12 +55,50 @@ type Service struct {
 	thumbCache   map[string]cachedBytes
 	inflight     map[string]*inflightCall
 	inflightLock sync.Mutex
+
+	warpMu           sync.Mutex
+	warpCheckedAt    time.Time
+	warpActiveCached bool
 }
 
 var (
 	reQualityHeight = regexp.MustCompile(`(\d+)p`)
 	reMPDBaseURL    = regexp.MustCompile(`<BaseURL>([^<]+)</BaseURL>`)
 )
+
+func buildClients(proxyFunc func(*http.Request) (*url.URL, error)) (*http.Client, *http.Client) {
+	transport := &http.Transport{
+		Proxy: proxyFunc,
+		DialContext: (&net.Dialer{
+			Timeout:   8 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          120,
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   8 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 9 * time.Second,
+	}
+
+	apiClient := &http.Client{
+		Timeout:   14 * time.Second,
+		Transport: transport,
+	}
+
+	// Stream client with manual redirect interception so 302s to *.googlevideo.com
+	// stay inside the server and retain WARP/upstream headers cleanly.
+	streamClient := &http.Client{
+		Timeout:   0,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	return apiClient, streamClient
+}
 
 func NewService(baseURL string, upstreamRoots ...string) *Service {
 	cleaned := strings.TrimRight(strings.TrimSpace(baseURL), "/")
@@ -70,45 +114,114 @@ func NewService(baseURL string, upstreamRoots ...string) *Service {
 		upstream = cleaned + "/api/invidious"
 	}
 
-	// Transport with ResponseHeaderTimeout ONLY (no total body timeout so long streams never cut off!)
-	streamTransport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          120,
-		MaxIdleConnsPerHost:   32,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 25 * time.Second,
-	}
+	apiClient, streamClient := buildClients(http.ProxyFromEnvironment)
 
-	// Stream client with manual redirect interception so 302s to *.googlevideo.com
-	// stay inside the server and retain WARP/upstream headers cleanly.
-	streamClient := &http.Client{
-		Timeout:   0,
-		Transport: streamTransport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	warpProxyURL := strings.TrimSpace(os.Getenv("WARP_PROXY"))
+	if warpProxyURL == "" {
+		warpProxyURL = "http://127.0.0.1:29083"
+	}
+	var warpAPIClient, warpStreamClient *http.Client
+	var warpHostPort string
+	if !strings.EqualFold(warpProxyURL, "off") && !strings.EqualFold(warpProxyURL, "none") {
+		if parsedWarp, err := url.Parse(warpProxyURL); err == nil && parsedWarp.Host != "" {
+			warpHostPort = parsedWarp.Host
+			warpAPIClient, warpStreamClient = buildClients(http.ProxyURL(parsedWarp))
+		}
 	}
 
 	return &Service{
-		BaseURL:      cleaned,
-		UpstreamRoot: upstream,
-		apiClient: &http.Client{
-			Timeout:   16 * time.Second,
-			Transport: streamTransport,
-		},
-		streamClient: streamClient,
-		videoCache:   make(map[string]cachedVideo),
-		rawCache:     make(map[string]cachedBytes),
-		thumbCache:   make(map[string]cachedBytes),
-		inflight:     make(map[string]*inflightCall),
+		BaseURL:          cleaned,
+		UpstreamRoot:     upstream,
+		WarpProxyURL:     warpProxyURL,
+		warpHostPort:     warpHostPort,
+		apiClient:        apiClient,
+		streamClient:     streamClient,
+		warpAPIClient:    warpAPIClient,
+		warpStreamClient: warpStreamClient,
+		videoCache:       make(map[string]cachedVideo),
+		rawCache:         make(map[string]cachedBytes),
+		thumbCache:       make(map[string]cachedBytes),
+		inflight:         make(map[string]*inflightCall),
 	}
+}
+
+// IsWarpActive checks whether the local userspace Cloudflare WARP HTTP proxy (usque) is reachable.
+func (s *Service) IsWarpActive() bool {
+	if s.warpHostPort == "" || s.warpAPIClient == nil {
+		return false
+	}
+	s.warpMu.Lock()
+	ttl := 12 * time.Second
+	if !s.warpActiveCached {
+		ttl = 3 * time.Second
+	}
+	if time.Since(s.warpCheckedAt) < ttl {
+		res := s.warpActiveCached
+		s.warpMu.Unlock()
+		return res
+	}
+	s.warpMu.Unlock()
+
+	conn, err := net.DialTimeout("tcp", s.warpHostPort, 250*time.Millisecond)
+	active := err == nil
+	if conn != nil {
+		_ = conn.Close()
+	}
+
+	s.warpMu.Lock()
+	s.warpCheckedAt = time.Now()
+	s.warpActiveCached = active
+	s.warpMu.Unlock()
+	return active
+}
+
+func (s *Service) doRequest(req *http.Request, isStream bool, bodyPayload []byte) (*http.Response, error) {
+	directClient := s.apiClient
+	warpClient := s.warpAPIClient
+	if isStream {
+		directClient = s.streamClient
+		warpClient = s.warpStreamClient
+	}
+
+	warpAvailable := warpClient != nil && s.IsWarpActive()
+	forceWarp := strings.EqualFold(os.Getenv("WARP_FORCE"), "1") || strings.EqualFold(os.Getenv("WARP_FORCE"), "true")
+
+	buildClone := func() (*http.Request, error) {
+		cloned := req.Clone(req.Context())
+		if len(bodyPayload) > 0 && req.Method != http.MethodGet && req.Method != http.MethodHead {
+			cloned.Body = io.NopCloser(bytes.NewReader(bodyPayload))
+		}
+		return cloned, nil
+	}
+
+	if forceWarp && warpAvailable {
+		r1, _ := buildClone()
+		resp, err := warpClient.Do(r1)
+		if err == nil && resp.StatusCode != 403 && resp.StatusCode != 429 && resp.StatusCode < 502 {
+			return resp, nil
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+		r2, _ := buildClone()
+		return directClient.Do(r2)
+	}
+
+	resp, err := directClient.Do(req)
+	if (err != nil || (resp != nil && (resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode >= 502))) && warpAvailable {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		rRetry, _ := buildClone()
+		if wResp, wErr := warpClient.Do(rRetry); wErr == nil {
+			return wResp, nil
+		} else if err != nil {
+			return nil, err
+		} else {
+			return nil, wErr
+		}
+	}
+	return resp, err
 }
 
 // RewriteStreamURLToSameOrigin normalizes all Invidious, Companion, yt.khoavo.vndns.net,
@@ -133,6 +246,9 @@ func (s *Service) RewriteStreamURLToSameOrigin(raw string) string {
 
 	// Root-relative upstream path (e.g. /companion/videoplayback..., /api/manifest/dash/..., /videoplayback..., /latest_version...)
 	if strings.HasPrefix(trimmed, "/") {
+		if strings.HasPrefix(trimmed, "/videoplayback") {
+			return ensureLocalIfNeeded("/api/invidious/companion" + trimmed)
+		}
 		return ensureLocalIfNeeded("/api/invidious" + trimmed)
 	}
 
@@ -171,11 +287,15 @@ func (s *Service) RewriteStreamURLToSameOrigin(raw string) string {
 		return "/api/invidious/companion" + escapedPath + "?" + q
 	}
 
+	// Route /videoplayback paths through Companion WARP proxy endpoint
+	if u.Path == "/videoplayback" || strings.HasPrefix(u.Path, "/videoplayback/") {
+		return "/api/invidious/companion" + pathAndQuery
+	}
+
 	// Any Invidious/Companion domain (yt.khoavo.vndns.net, u.khoavo.vndns.net, companion:8282, invidious:3000, etc.)
 	if strings.HasPrefix(u.Path, "/api/") ||
 		strings.HasPrefix(u.Path, "/companion/") ||
 		u.Path == "/companion" ||
-		strings.HasPrefix(u.Path, "/videoplayback") ||
 		strings.HasPrefix(u.Path, "/latest_version") ||
 		strings.Contains(host, "khoavo.") ||
 		host == "companion" ||
@@ -208,10 +328,17 @@ func (s *Service) buildUpstreamTarget(subPath string, rawQuery string) string {
 		cleanSub = "/" + cleanSub
 	}
 
-	// Upstream is https://u.khoavo.vndns.net/api/invidious; appending /videoplayback... or /api/v1/... preserves routing!
-	// However, for /companion/videoplayback..., upstream Next.js proxy accepts BOTH /api/invidious/videoplayback AND /companion/videoplayback!
-	// Wait: if raw URL came from yt.khoavo.vndns.net/videoplayback -> s.UpstreamRoot + "/videoplayback..." works directly without extra /companion hop!
-	target := s.UpstreamRoot + cleanSub
+	// Preserve /companion/* and route /videoplayback* to Companion endpoint on u.khoavo.vndns.net
+	// because /companion/videoplayback responds fast over WARP whereas /api/invidious/videoplayback stalls.
+	var target string
+	if strings.HasPrefix(cleanSub, "/companion/") || cleanSub == "/companion" {
+		target = s.BaseURL + cleanSub
+	} else if strings.HasPrefix(cleanSub, "/videoplayback") {
+		target = s.BaseURL + "/companion" + cleanSub
+	} else {
+		target = s.UpstreamRoot + cleanSub
+	}
+
 	if rawQuery != "" {
 		target += "?" + rawQuery
 	}
@@ -274,20 +401,19 @@ func (s *Service) rewriteVideoPayloadMap(raw map[string]interface{}, videoID str
 
 func (s *Service) rewriteMPDManifest(xmlBytes []byte) []byte {
 	text := string(xmlBytes)
+	text = strings.ReplaceAll(text, "https://yt.khoavo.vndns.net/videoplayback", "/api/invidious/companion/videoplayback")
 	text = strings.ReplaceAll(text, "https://yt.khoavo.vndns.net/", "/api/invidious/")
 	text = strings.ReplaceAll(text, "https://u.khoavo.vndns.net/api/invidious/", "/api/invidious/")
 	text = strings.ReplaceAll(text, "https://ut.khoavo.myds.me/api/invidious/", "/api/invidious/")
 
-	// Rewrite <BaseURL>/companion/...</BaseURL> or <BaseURL>/videoplayback...</BaseURL> to /api/invidious/videoplayback...
+	// Rewrite <BaseURL>/companion/...</BaseURL> or <BaseURL>/videoplayback...</BaseURL> preserving /companion/
 	text = reMPDBaseURL.ReplaceAllStringFunc(text, func(match string) string {
 		inner := strings.TrimSuffix(strings.TrimPrefix(match, "<BaseURL>"), "</BaseURL>")
 		trimmed := strings.TrimSpace(inner)
-		if strings.HasPrefix(trimmed, "/companion/videoplayback") {
-			trimmed = "/api/invidious" + strings.TrimPrefix(trimmed, "/companion")
-		} else if strings.HasPrefix(trimmed, "/companion/") {
+		if strings.HasPrefix(trimmed, "/companion/") || trimmed == "/companion" {
 			trimmed = "/api/invidious" + trimmed
 		} else if strings.HasPrefix(trimmed, "/videoplayback") {
-			trimmed = "/api/invidious" + trimmed
+			trimmed = "/api/invidious/companion" + trimmed
 		} else if strings.HasPrefix(trimmed, "https://") {
 			unescaped := strings.ReplaceAll(trimmed, "&amp;", "&")
 			rewritten := s.RewriteStreamURLToSameOrigin(unescaped)
@@ -343,7 +469,7 @@ func (s *Service) fetchRawInvidiousVideo(ctx context.Context, videoID string) ([
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PhimAI/2.0")
 
-	resp, err := s.apiClient.Do(req)
+	resp, err := s.doRequest(req, false, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -354,6 +480,15 @@ func (s *Service) fetchRawInvidiousVideo(ctx context.Context, videoID string) ([
 		return nil, nil, err
 	}
 	if resp.StatusCode != http.StatusOK || len(bytes.TrimSpace(bodyBytes)) == 0 {
+		lowerBody := strings.ToLower(string(bodyBytes))
+		if strings.Contains(lowerBody, "private video") ||
+			strings.Contains(lowerBody, "this video is private") ||
+			strings.Contains(lowerBody, "video unavailable") ||
+			strings.Contains(lowerBody, "no longer available") ||
+			strings.Contains(lowerBody, "has been removed") ||
+			strings.Contains(lowerBody, "account associated with this video has been terminated") {
+			return nil, nil, fmt.Errorf("unavailable: %s", strings.TrimSpace(string(bodyBytes)))
+		}
 		return nil, nil, fmt.Errorf("upstream status %d", resp.StatusCode)
 	}
 
@@ -431,14 +566,8 @@ func (s *Service) ProxyInvidious(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Normalize /companion/videoplayback -> /videoplayback against u.khoavo.vndns.net/api/invidious
-	// UNLESS explicit googlevideo host query param is present and needs companion.
-	effectiveSub := subPath
-	if strings.HasPrefix(effectiveSub, "/companion/") && !strings.Contains(r.URL.RawQuery, "host=") {
-		effectiveSub = strings.TrimPrefix(effectiveSub, "/companion")
-	}
-
-	targetURL := s.buildUpstreamTarget(effectiveSub, r.URL.RawQuery)
+	// Preserve /companion/* and route through buildUpstreamTarget
+	targetURL := s.buildUpstreamTarget(subPath, r.URL.RawQuery)
 
 	var bodyBytes []byte
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Body != nil {
@@ -475,7 +604,7 @@ func (s *Service) ProxyInvidious(w http.ResponseWriter, r *http.Request) {
 			upReq.Header.Set("Accept", acc)
 		}
 
-		res, err := s.streamClient.Do(upReq)
+		res, err := s.doRequest(upReq, true, bodyBytes)
 		if err != nil {
 			http.Error(w, `{"error":"upstream connection failed"}`, http.StatusBadGateway)
 			return
@@ -707,11 +836,18 @@ func (s *Service) GetVideo(ctx context.Context, videoID string, fallback *models
 		resp.ViewCount = fallback.ViewsNum
 		resp.LengthSeconds = fallback.DurMins * 60
 		if fallback.Channel != "" {
-			resp.ChannelURL = "/?channel=" + url.QueryEscape(fallback.Channel)
+			resp.ChannelURL = "/channel/" + url.PathEscape(fallback.Channel)
 		}
 	}
 
 	_, raw, err := s.fetchRawInvidiousVideo(ctx, videoID)
+	if err != nil && strings.HasPrefix(err.Error(), "unavailable:") {
+		resp.Unavailable = true
+		resp.UnavailableReason = "Video gốc đã bị kênh chủ quản đặt riêng tư (Private) hoặc gỡ bỏ."
+		if s.OnDeadVideo != nil {
+			go s.OnDeadVideo(videoID)
+		}
+	}
 	if err == nil && raw != nil {
 		if t, ok := raw["title"].(string); ok && t != "" && resp.Title == "" {
 			resp.Title = t
@@ -885,7 +1021,7 @@ func (s *Service) GetVideo(ctx context.Context, videoID string, fallback *models
 
 	if resp.ChannelURL == "" {
 		if resp.Author != "" {
-			resp.ChannelURL = "/?channel=" + url.QueryEscape(resp.Author)
+			resp.ChannelURL = "/channel/" + url.PathEscape(resp.Author)
 		} else {
 			resp.ChannelURL = "/"
 		}
@@ -963,6 +1099,63 @@ func (s *Service) Prewarm(films []models.Film, maxCount int) {
 	log.Printf("Pre-warming stream cache for %d featured films", maxCount)
 }
 
+// GetChannelUpstream fetches live channel metadata and latest videos from upstream Invidious (cached 30 min).
+func (s *Service) GetChannelUpstream(ctx context.Context, authorID string) (map[string]interface{}, error) {
+	if authorID == "" {
+		return nil, fmt.Errorf("missing authorID")
+	}
+	cacheKey := "channel:" + authorID
+	s.mu.RLock()
+	if cached, ok := s.rawCache[cacheKey]; ok && time.Now().Before(cached.expiry) && len(cached.body) > 0 {
+		var parsed map[string]interface{}
+		if json.Unmarshal(cached.body, &parsed) == nil {
+			s.mu.RUnlock()
+			return parsed, nil
+		}
+	}
+	s.mu.RUnlock()
+
+	apiURL := fmt.Sprintf("%s/api/v1/channels/%s", s.UpstreamRoot, url.PathEscape(authorID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PhimAI/2.0")
+
+	resp, err := s.doRequest(req, false, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK || len(bytes.TrimSpace(bodyBytes)) == 0 {
+		return nil, fmt.Errorf("upstream channel status %d", resp.StatusCode)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	if len(s.rawCache) > 600 {
+		s.rawCache = make(map[string]cachedBytes)
+	}
+	s.rawCache[cacheKey] = cachedBytes{
+		statusCode:  http.StatusOK,
+		contentType: "application/json; charset=utf-8",
+		body:        bodyBytes,
+		expiry:      time.Now().Add(30 * time.Minute),
+	}
+	s.mu.Unlock()
+	return parsed, nil
+}
+
 // ProxyStream streams video bytes from upstream latest_version proxy with Range support.
 func (s *Service) ProxyStream(w http.ResponseWriter, r *http.Request, videoID string) {
 	itag := r.URL.Query().Get("itag")
@@ -985,7 +1178,7 @@ func (s *Service) ProxyStream(w http.ResponseWriter, r *http.Request, videoID st
 		req.Header.Set("Range", rng)
 	}
 
-	resp, err := s.streamClient.Do(req)
+	resp, err := s.doRequest(req, true, nil)
 	if err != nil {
 		http.Error(w, `{"error":"stream upstream unreachable"}`, http.StatusBadGateway)
 		return
@@ -1042,8 +1235,10 @@ func (s *Service) ProxyThumb(w http.ResponseWriter, r *http.Request, videoID str
 		fmt.Sprintf("%s/vi/%s/hqdefault.jpg", s.UpstreamRoot, url.PathEscape(videoID)),
 		fmt.Sprintf("%s/vi/%s/maxresdefault.jpg", s.UpstreamRoot, url.PathEscape(videoID)),
 		fmt.Sprintf("%s/vi/%s/mqdefault.jpg", s.UpstreamRoot, url.PathEscape(videoID)),
+		fmt.Sprintf("https://i.ytimg.com/vi/%s/hqdefault.jpg", url.PathEscape(videoID)),
 	}
 
+	seen404 := 0
 	for _, target := range candidates {
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
@@ -1052,10 +1247,13 @@ func (s *Service) ProxyThumb(w http.ResponseWriter, r *http.Request, videoID str
 			continue
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PhimAI/2.0")
-		resp, err := s.apiClient.Do(req)
+		resp, err := s.doRequest(req, false, nil)
 		if err != nil {
 			cancel()
 			continue
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			seen404++
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 		resp.Body.Close()
@@ -1086,6 +1284,9 @@ func (s *Service) ProxyThumb(w http.ResponseWriter, r *http.Request, videoID str
 			}
 			return
 		}
+	}
+	if seen404 == len(candidates) && s.OnDeadVideo != nil {
+		go s.OnDeadVideo(videoID)
 	}
 
 	svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 270" width="480" height="270">

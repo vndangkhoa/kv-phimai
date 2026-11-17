@@ -10,6 +10,8 @@ import {
   IoTimeOutline,
   IoSendOutline,
   IoArrowBack,
+  IoPersonAddOutline,
+  IoCheckmark,
 } from 'react-icons/io5';
 import type { Film, FilterState } from '../types/phimai';
 import {
@@ -19,7 +21,12 @@ import {
   getSeriesEpisodes,
   getThumbUrl,
 } from '../utils/phimaiUtils';
-import { fetchVideoStream, prefetchVideoStream } from '../services/streamService';
+import {
+  fetchVideoStream,
+  isChannelSubscribed,
+  toggleChannelSubscription,
+  SUBSCRIPTIONS_EVENT,
+} from '../services/streamService';
 
 interface CommentItem {
   id: string | number;
@@ -37,6 +44,7 @@ interface WatchPageProps {
   rating?: { s: number; n: number };
   onToggleSave: (id: string) => void;
   onSelectFilm: (film: Film) => void;
+  onOpenChannel: (channelName: string) => void;
   onBackHome: () => void;
   onFilterByPatch: (patch: Partial<FilterState>) => void;
   onSeekToSec: (sec: number) => void;
@@ -51,6 +59,7 @@ export function WatchPage({
   rating,
   onToggleSave,
   onSelectFilm,
+  onOpenChannel,
   onBackHome,
   onFilterByPatch,
   onSeekToSec,
@@ -72,7 +81,15 @@ export function WatchPage({
   const [postingComment, setPostingComment] = useState(false);
   const [hoverStar, setHoverStar] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
+  const [subscribed, setSubscribed] = useState(() => isChannelSubscribed(film.channel));
   const chipBarRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setSubscribed(isChannelSubscribed(film.channel));
+    const sync = () => setSubscribed(isChannelSubscribed(film.channel));
+    window.addEventListener(SUBSCRIPTIONS_EVENT, sync);
+    return () => window.removeEventListener(SUBSCRIPTIONS_EVENT, sync);
+  }, [film.channel]);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth <= 1024);
@@ -346,9 +363,10 @@ export function WatchPage({
           <div className="watch-meta-container">
             <div className="watch-channel-group">
               <div
-                onClick={() => onFilterByPatch({ channel: film.channel })}
+                onClick={() => onOpenChannel(film.channel)}
                 className="watch-channel-link"
                 style={{ cursor: 'pointer' }}
+                title={`Mở trang kênh ${film.channel}`}
               >
                 <div
                   style={{
@@ -388,11 +406,27 @@ export function WatchPage({
 
               <button
                 type="button"
-                onClick={() => onFilterByPatch({ channel: film.channel })}
-                className="watch-sub-btn unsubscribed"
-                style={{ height: '36px', fontSize: '13px', padding: '0 14px' }}
+                onClick={() => {
+                  const res = toggleChannelSubscription({
+                    name: film.channel,
+                    thumbnail: getThumbUrl(film.id),
+                  });
+                  setSubscribed(res.subscribed);
+                }}
+                className={`watch-sub-btn ${subscribed ? 'subscribed' : 'unsubscribed'}`}
+                style={{ height: '36px', fontSize: '13px', padding: '0 14px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
               >
-                Xem theo kênh
+                {subscribed ? <IoCheckmark size={15} /> : <IoPersonAddOutline size={14} />}
+                <span>{subscribed ? 'Đã đăng ký' : 'Đăng ký'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onOpenChannel(film.channel)}
+                className="watch-action-pill"
+                style={{ height: '36px', fontSize: '12.5px', padding: '0 12px' }}
+              >
+                <span>Trang kênh</span>
               </button>
             </div>
 
@@ -755,7 +789,6 @@ export function WatchPage({
                   e.preventDefault();
                   onSelectFilm(rel);
                 }}
-                onMouseEnter={() => prefetchVideoStream(rel.id)}
                 className="yt-related-card"
               >
                 <div className="yt-related-thumb-container">

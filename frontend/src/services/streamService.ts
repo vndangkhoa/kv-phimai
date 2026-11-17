@@ -1,4 +1,4 @@
-import type { Film } from '../types/phimai';
+import type { ChannelDetailResponse, ChannelInfo, Film } from '../types/phimai';
 
 export interface StreamFormatItem {
   url: string;
@@ -39,6 +39,8 @@ export interface VideoStreamPayload {
   formatStreams?: StreamFormatItem[];
   adaptiveFormats?: StreamFormatItem[];
   captions?: VideoCaptionItem[];
+  unavailable?: boolean;
+  unavailableReason?: string;
   film?: Film;
   series?: Film[];
   related?: Film[];
@@ -97,8 +99,11 @@ export function proxySameOriginUrl(raw?: string | null): string {
   ) {
     return trimmed;
   }
-  if (trimmed.startsWith('/companion/')) {
-    return `/api/invidious${trimmed.replace(/^\/companion/, '')}`;
+  if (trimmed === '/companion' || trimmed.startsWith('/companion/')) {
+    return `/api/invidious${trimmed}`;
+  }
+  if (trimmed.startsWith('/videoplayback')) {
+    return `/api/invidious/companion${trimmed}`;
   }
   if (trimmed.startsWith('/')) {
     return `/api/invidious${trimmed}`;
@@ -115,7 +120,10 @@ export function proxySameOriginUrl(raw?: string | null): string {
       const hasHost = u.searchParams.has('host');
       return `/api/invidious/companion${u.pathname}${u.search}${hasHost ? '' : `${sep}host=${encodeURIComponent(u.hostname)}`}`;
     }
-    if (/^\/(api|companion|videoplayback|latest_version)(\/|$)/.test(u.pathname) || host.includes('khoavo.')) {
+    if (u.pathname === '/videoplayback' || u.pathname.startsWith('/videoplayback/')) {
+      return `/api/invidious/companion${pathAndQuery}`;
+    }
+    if (/^\/(api|companion|latest_version)(\/|$)/.test(u.pathname) || host.includes('khoavo.')) {
       return `/api/invidious${pathAndQuery}`;
     }
   } catch {
@@ -370,4 +378,99 @@ export function pickBestAutoQuality(
   }
   // Otherwise pick the lowest available playable resolution
   return pool[pool.length - 1];
+}
+
+// ---------------------------------------------------------------------------
+// Channel Subscriptions & Directory / Channel Surfing API
+// ---------------------------------------------------------------------------
+
+export const SUBSCRIPTIONS_KEY = 'phimai_subscriptions_v1';
+export const SUBSCRIPTIONS_EVENT = 'phimai-subscriptions-changed';
+
+export interface ChannelSubscription {
+  name: string;
+  authorId?: string;
+  thumbnail?: string;
+  subscribedAt: number;
+}
+
+export function getSubscribedChannels(): ChannelSubscription[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SUBSCRIPTIONS_KEY) || '[]');
+    if (Array.isArray(raw)) {
+      return raw.filter((item) => item && typeof item.name === 'string');
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+export function isChannelSubscribed(channelName: string): boolean {
+  if (!channelName) return false;
+  const target = channelName.toLowerCase();
+  return getSubscribedChannels().some((s) => s.name.toLowerCase() === target);
+}
+
+export function toggleChannelSubscription(ch: {
+  name: string;
+  authorId?: string;
+  thumbnail?: string;
+}): { subscribed: boolean; list: ChannelSubscription[] } {
+  const existing = getSubscribedChannels();
+  const targetLower = ch.name.toLowerCase();
+  const idx = existing.findIndex((s) => s.name.toLowerCase() === targetLower);
+  let next: ChannelSubscription[];
+  let subscribed: boolean;
+  if (idx >= 0) {
+    next = existing.filter((_, i) => i !== idx);
+    subscribed = false;
+  } else {
+    next = [
+      {
+        name: ch.name,
+        authorId: ch.authorId,
+        thumbnail: ch.thumbnail,
+        subscribedAt: Date.now(),
+      },
+      ...existing,
+    ];
+    subscribed = true;
+  }
+  try {
+    localStorage.setItem(SUBSCRIPTIONS_KEY, JSON.stringify(next));
+    window.dispatchEvent(new CustomEvent(SUBSCRIPTIONS_EVENT, { detail: next }));
+  } catch {
+    // ignore
+  }
+  return { subscribed, list: next };
+}
+
+export async function fetchChannelsList(
+  query = '',
+  sort: 'popular' | 'count' | 'name' = 'popular'
+): Promise<ChannelInfo[]> {
+  const params = new URLSearchParams();
+  if (query.trim()) params.set('q', query.trim());
+  if (sort) params.set('sort', sort);
+  const res = await fetch(`/api/channels?${params.toString()}`);
+  if (!res.ok) throw new Error('Không tải được danh sách kênh');
+  const data = await res.json();
+  return Array.isArray(data?.items) ? (data.items as ChannelInfo[]) : [];
+}
+
+export async function fetchChannelDetail(
+  idOrName: string,
+  opts: { sort?: 'newest' | 'popular' | 'oldest'; tab?: string; q?: string } = {}
+): Promise<ChannelDetailResponse | null> {
+  const params = new URLSearchParams();
+  if (opts.sort) params.set('sort', opts.sort);
+  if (opts.tab) params.set('tab', opts.tab);
+  if (opts.q) params.set('q', opts.q);
+  const qs = params.toString();
+  const res = await fetch(
+    `/api/channel/${encodeURIComponent(idOrName)}${qs ? `?${qs}` : ''}`
+  );
+  if (!res.ok) return null;
+  return (await res.json()) as ChannelDetailResponse;
 }

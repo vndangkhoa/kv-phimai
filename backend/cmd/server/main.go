@@ -28,10 +28,8 @@ func main() {
 	db := database.InitDB(cfg.DatabaseURL, cfg.DataDir)
 	cat := catalog.NewCatalog(cfg.DataDir, cfg.KVTubeURL)
 	kvt := kvtube.NewService(cfg.KVTubeURL, cfg.InvidiousUpstream)
+	kvt.OnDeadVideo = cat.MarkDead
 	handler := api.NewHandler(db, cat, kvt)
-
-	// Pre-warm stream metadata for the top featured films in background
-	go kvt.Prewarm(cat.Films, 8)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)

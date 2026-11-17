@@ -70,3 +70,34 @@ export interface PhimAIInterfaceProps {
   getKVTubeWatchUrl: (id: string) => string;
   activePartyCode?: string | null;
 }
+
+export interface ChannelInfo {
+  name: string;
+  authorId?: string;
+  count: number;
+  totalViews: number;
+  fullCount: number;
+  thumbnail: string;
+  banner: string;
+  categories: string[];
+  url: string;
+  previewFilms?: Film[];
+}
+
+export interface ChannelPlaylist {
+  id: string;
+  title: string;
+  count: number;
+  thumbnail: string;
+  films: Film[];
+}
+
+export interface ChannelDetailResponse extends ChannelInfo {
+  description?: string;
+  subCount?: number;
+  avatarUrl?: string;
+  bannerUrl?: string;
+  films: Film[];
+  playlists: ChannelPlaylist[];
+  totalMatched: number;
+}

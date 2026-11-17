@@ -2,7 +2,6 @@ import React, { memo, useState, useEffect } from 'react';
 import { IoBookmark, IoBookmarkOutline, IoCheckmarkCircle } from 'react-icons/io5';
 import type { Film } from '../types/phimai';
 import { getThumbUrl, formatViewsVN, CAT_LABEL } from '../utils/phimaiUtils';
-import { prefetchVideoStream } from '../services/streamService';
 
 interface VideoCardProps {
   film: Film;
@@ -47,11 +46,7 @@ export const VideoCard = memo(function VideoCard({
   const firstTool = (film.tool || 'AI').split('•')[0].trim();
 
   return (
-    <div
-      className="yt-video-card-container"
-      onMouseEnter={() => prefetchVideoStream(film.id)}
-      onTouchStart={() => prefetchVideoStream(film.id)}
-    >
+    <div className="yt-video-card-container">
       <div className="yt-card-thumb-wrapper">
         <a
           href={`/watch?v=${encodeURIComponent(film.id)}`}
@@ -124,7 +119,7 @@ export const VideoCard = memo(function VideoCard({
           onClick={() => onFilterChannel?.(film.channel)}
           className="yt-card-avatar-link"
           style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}
-          title={`Lọc phim từ ${film.channel}`}
+          title={`Xem kênh ${film.channel}`}
         >
           <div className="yt-card-avatar-circle">
             <span>{(film.channel || 'P').charAt(0).toUpperCase()}</span>

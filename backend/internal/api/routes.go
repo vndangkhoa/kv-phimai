@@ -12,6 +12,8 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 	r.Get("/films/search", h.SearchFilms)
 	r.Get("/films/{id}", h.GetFilmDetail)
 	r.Get("/channels", h.GetChannels)
+	r.Get("/channel/{id}", h.GetChannelDetail)
+	r.Get("/channel/*", h.GetChannelDetail)
 
 	// Native Invidious / Companion Same-Origin Proxy Architecture + Video Stream Engine
 	r.HandleFunc("/invidious", h.ProxyInvidious)
