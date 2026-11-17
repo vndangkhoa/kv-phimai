@@ -150,6 +150,7 @@ func resolveFrontendDir() string {
 		filepath.Join(workDir, "dist"),
 		filepath.Join(workDir, "..", "frontend", "dist"),
 		filepath.Join(workDir, "frontend", "dist"),
+		"/mnt/data/Package Center/kv-phimai/frontend/dist",
 		"/mnt/data/Projects/phimai/frontend/dist",
 		"/app/dist",
 	}
