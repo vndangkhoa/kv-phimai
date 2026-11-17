@@ -15,7 +15,9 @@
     "hls.js": "^1.6.15",
     "lucide-react": "^0.563.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "react-icons": "^5.7.0",
+    "shaka-player": "^5.3.5"
   },
   "devDependencies": {
     "@astryxdesign/cli": "^0.7.16",

@@ -58,6 +58,11 @@ type KVTubeStreamItem struct {
 	Itag         string `json:"itag,omitempty"`
 	Type         string `json:"type"`
 	Container    string `json:"container,omitempty"`
+	Encoding     string `json:"encoding,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	Bitrate      int64  `json:"bitrate,omitempty"`
+	FPS          int    `json:"fps,omitempty"`
+	HasAudio     bool   `json:"hasAudio,omitempty"`
 	AudioOnly    bool   `json:"audioOnly,omitempty"`
 }
 
@@ -79,12 +84,16 @@ type KVTubeVideoResponse struct {
 	ChannelURL      string                   `json:"channelUrl"`
 	ThumbnailURL    string                   `json:"thumbnailUrl"`
 	DirectStreamURL string                   `json:"directStreamUrl"`
+	BestAudioURL    string                   `json:"bestAudioUrl,omitempty"`
 	HlsURL          string                   `json:"hlsUrl,omitempty"`
 	DashURL         string                   `json:"dashUrl,omitempty"`
 	Streams         []KVTubeStreamItem       `json:"streams"`
 	FormatStreams   []map[string]interface{} `json:"formatStreams,omitempty"`
 	AdaptiveFormats []map[string]interface{} `json:"adaptiveFormats,omitempty"`
 	Captions        []KVTubeCaption          `json:"captions"`
+	Film            *Film                    `json:"film,omitempty"`
+	Series          []Film                   `json:"series,omitempty"`
+	Related         []Film                   `json:"related,omitempty"`
 }
 
 // SQLite Persisted Models

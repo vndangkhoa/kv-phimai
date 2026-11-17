@@ -1,1 +1,0 @@
-export { InterfaceOne } from './InterfaceOne';

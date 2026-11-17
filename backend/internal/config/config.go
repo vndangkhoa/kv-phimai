@@ -6,23 +6,26 @@ import (
 )
 
 type Config struct {
-	Port           string
-	DatabaseURL    string
-	DataDir        string
-	KVTubeURL      string
-	AllowedOrigins []string
+	Port              string
+	DatabaseURL       string
+	DataDir           string
+	KVTubeURL         string
+	InvidiousUpstream string
+	AllowedOrigins    []string
 }
 
 func Load() *Config {
 	dataDir := getEnv("DATA_DIR", findDataDir())
 	dbDefault := filepath.Join(dataDir, "phimai.db")
+	kvtURL := getEnv("KVTUBE_URL", "https://u.khoavo.vndns.net")
 
 	return &Config{
-		Port:           getEnv("PORT", "8090"),
-		DatabaseURL:    getEnv("DATABASE_URL", dbDefault),
-		DataDir:        dataDir,
-		KVTubeURL:      getEnv("KVTUBE_URL", "https://u.khoavo.vndns.net"),
-		AllowedOrigins: []string{"*"},
+		Port:              getEnv("PORT", "8090"),
+		DatabaseURL:       getEnv("DATABASE_URL", dbDefault),
+		DataDir:           dataDir,
+		KVTubeURL:         kvtURL,
+		InvidiousUpstream: getEnv("INVIDIOUS_UPSTREAM", kvtURL+"/api/invidious"),
+		AllowedOrigins:    []string{"*"},
 	}
 }
 

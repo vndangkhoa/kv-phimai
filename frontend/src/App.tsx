@@ -1,19 +1,22 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
-import { InterfaceOne } from './interfaces';
-import type { Film, FilterState, PhimAIInterfaceProps } from './types/phimai';
-import { PlayerModal } from './components/PlayerModal';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { IoChevronForward } from 'react-icons/io5';
+import type { Film, FilterState } from './types/phimai';
+import { Header } from './components/Header';
+import { Sidebar } from './components/Sidebar';
+import { MobileNav } from './components/MobileNav';
+import { VideoCard } from './components/VideoCard';
+import { WatchPage } from './components/WatchPage';
+import { PersistentPlayer } from './components/PersistentPlayer';
 import { SwipeFeedModal } from './components/SwipeFeedModal';
 import { AskAssistantModal } from './components/AskAssistantModal';
 import { WatchPartyModal } from './components/WatchPartyModal';
 import {
   CAT_LABEL,
   GENRE_GROUPS,
-  durMinutes,
   genreMatch,
-  getKVTubeWatchUrl,
-  getThumbUrl,
   viewsNumber,
 } from './utils/phimaiUtils';
+import { prefetchVideoStream } from './services/streamService';
 
 const DEFAULT_FILTERS: FilterState = {
   query: '',
@@ -66,31 +69,87 @@ const FALLBACK_SEED_FILMS: Film[] = [
   },
 ];
 
-export function App() {
-  const [allFilms, setAllFilms] = useState<Film[]>(FALLBACK_SEED_FILMS);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [shownCount, setShownCount] = useState<number>(60);
-  const [filters, setFiltersState] = useState<FilterState>(DEFAULT_FILTERS);
+function parseRouteFromLocation(): { view: 'home' | 'watch' | 'shorts'; videoId: string; t: number; channel: string; query: string } {
+  const path = window.location.pathname || '/';
+  const params = new URLSearchParams(window.location.search || '');
+  const v = params.get('v') || '';
+  const t = parseFloat(params.get('t') || '0') || 0;
+  const channel = params.get('channel') || '';
+  const query = params.get('q') || '';
 
-  // Metadata states
-  const [manifestCategories, setManifestCategories] = useState<Record<string, number>>({});
-  const [manifestGenres, setManifestGenres] = useState<Record<string, number>>({});
-  const [stats, setStats] = useState({
-    online: 48,
-    visits: 184520,
-    plays: 642910,
-    totalFilms: 9220,
-    newWeek: 142,
+  if (path === '/watch' && v) {
+    return { view: 'watch', videoId: v, t, channel: '', query: '' };
+  }
+  if (path === '/shorts') {
+    return { view: 'shorts', videoId: v, t: 0, channel: '', query: '' };
+  }
+  return { view: 'home', videoId: '', t: 0, channel, query };
+}
+
+export function App() {
+  const initialRoute = useMemo(() => parseRouteFromLocation(), []);
+
+  const [allFilms, setAllFilms] = useState<Film[]>(FALLBACK_SEED_FILMS);
+  const [loading, setLoading] = useState(true);
+  const [shownCount, setShownCount] = useState(24);
+  const [filters, setFiltersState] = useState<FilterState>(() => ({
+    ...DEFAULT_FILTERS,
+    channel: initialRoute.channel,
+    query: initialRoute.query,
+  }));
+
+  const [routeView, setRouteView] = useState<'home' | 'watch' | 'shorts'>(
+    initialRoute.view === 'shorts' ? 'home' : initialRoute.view
+  );
+  const [watchVideoId, setWatchVideoId] = useState<string>(initialRoute.videoId);
+  const [watchInitialTime, setWatchInitialTime] = useState<number>(initialRoute.t);
+  const [activeFilm, setActiveFilm] = useState<Film | null>(() => {
+    if (initialRoute.videoId) {
+      return (
+        FALLBACK_SEED_FILMS.find((f) => f.id === initialRoute.videoId) || {
+          id: initialRoute.videoId,
+          rank: 0,
+          title: 'Đang tải phim AI...',
+          channel: 'PhimAI',
+          views: '0',
+          dur: '',
+          cat: 'fantasy',
+          tool: 'AI',
+          blurb: '',
+          tags: [],
+        }
+      );
+    }
+    return null;
   });
-  const [topWeekRaw, setTopWeekRaw] = useState<Array<{ id: string; count: number }>>([]);
+
+  // Player shared runtime state
+  const [currentPlaySec, setCurrentPlaySec] = useState<number>(0);
+  const [externalSeekSec, setExternalSeekSec] = useState<{ sec: number; nonce: number } | null>(null);
+  const [sleepMinutes, setSleepMinutes] = useState<number>(0);
+
+  // Layout UI states: separate desktop persistent rail from overlay/mobile drawer
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() =>
+    typeof window !== 'undefined' && initialRoute.view !== 'watch' ? window.innerWidth > 1024 : false
+  );
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth <= 768 : false
+  );
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try {
+      return localStorage.getItem('phimai_theme') === 'light' ? 'light' : 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
+
+  // Catalog metadata
+  const [manifestCategories, setManifestCategories] = useState<Record<string, number>>({});
+  const [onlineCount, setOnlineCount] = useState(48);
   const [hotCounts, setHotCounts] = useState<Record<string, number>>({});
   const [ratings, setRatings] = useState<Record<string, { s: number; n: number }>>({});
-  const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
-  const [wallPosts, setWallPosts] = useState<
-    Array<{ id: string; name: string; text: string; ts: number; likes: number }>
-  >([]);
 
-  // User local persistence
+  // User Saved & History
   const [savedIds, setSavedIds] = useState<Set<string>>(() => {
     try {
       const raw = JSON.parse(localStorage.getItem('phimaihot_saved') || '[]');
@@ -99,7 +158,6 @@ export function App() {
       return new Set();
     }
   });
-
   const [historyIds, setHistoryIds] = useState<string[]>(() => {
     try {
       const raw = JSON.parse(localStorage.getItem('phimaihot_history') || '[]');
@@ -109,10 +167,8 @@ export function App() {
     }
   });
 
-  // Modals state
-  const [activeFilm, setActiveFilm] = useState<Film | null>(null);
-  const [swipeOpen, setSwipeOpen] = useState<boolean>(false);
-  const [swipeStartFilm, setSwipeStartFilm] = useState<Film | null>(null);
+  // Secondary tool modals (Shorts, AI Assistant, Watch Party)
+  const [swipeOpen, setSwipeOpen] = useState<boolean>(initialRoute.view === 'shorts');
   const [askOpen, setAskOpen] = useState<boolean>(false);
   const [watchPartyOpen, setWatchPartyOpen] = useState<boolean>(false);
   const [watchPartyFilm, setWatchPartyFilm] = useState<Film | null>(null);
@@ -124,155 +180,113 @@ export function App() {
       return null;
     }
   });
-  const [isPartyHost, setIsPartyHost] = useState<boolean>(false);
+  const [isPartyHost, setIsPartyHost] = useState(false);
 
-  // Merge helper for films
+  const chipBarRef = useRef<HTMLDivElement>(null);
+  const loadMoreTriggerRef = useRef<HTMLDivElement>(null);
+
+  // Apply theme
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem('phimai_theme', theme);
+    } catch {
+      // ignore
+    }
+  }, [theme]);
+
+  // Sleep timer shutdown
+  useEffect(() => {
+    if (sleepMinutes <= 0) return;
+    const timer = setTimeout(() => {
+      const vid = document.querySelector('#persistent-player-host video') as HTMLVideoElement | null;
+      const aud = document.querySelector('#persistent-player-host audio') as HTMLAudioElement | null;
+      vid?.pause();
+      aud?.pause();
+      setSleepMinutes(0);
+    }, sleepMinutes * 60 * 1000);
+    return () => clearTimeout(timer);
+  }, [sleepMinutes]);
+
+  // Responsive listener: auto-close overlay drawer when switching down to mobile
+  useEffect(() => {
+    const onResize = () => {
+      const mobile = window.innerWidth <= 768;
+      setIsMobileViewport((prev) => {
+        if (!prev && mobile) setIsSidebarOpen(false);
+        return mobile;
+      });
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Merge catalog helper
   const mergeFilmsIntoCatalog = useCallback((incoming: Film[]) => {
     if (!Array.isArray(incoming) || incoming.length === 0) return;
     setAllFilms((prev) => {
       const byId = new Map<string, Film>();
-      for (const f of prev) {
-        if (f && f.id) byId.set(f.id, f);
-      }
+      for (const f of prev) if (f?.id) byId.set(f.id, f);
       for (const f of incoming) {
-        if (!f || !f.id) continue;
-        const existing = byId.get(f.id);
-        if (existing) {
-          byId.set(f.id, {
-            ...existing,
-            ...f,
-            blurbLong: f.blurbLong || existing.blurbLong,
-            tags: Array.isArray(f.tags) && f.tags.length > 0 ? f.tags : existing.tags || [],
-          });
-        } else {
-          byId.set(f.id, {
-            ...f,
-            tags: Array.isArray(f.tags) ? f.tags : [],
-          });
-        }
+        if (!f?.id) continue;
+        const ex = byId.get(f.id);
+        byId.set(
+          f.id,
+          ex
+            ? { ...ex, ...f, blurbLong: f.blurbLong || ex.blurbLong, tags: f.tags?.length ? f.tags : ex.tags || [] }
+            : { ...f, tags: Array.isArray(f.tags) ? f.tags : [] }
+        );
       }
       return Array.from(byId.values()).sort((a, b) => b.rank - a.rank);
     });
   }, []);
 
-  // Initial boot: fetch manifest, initial films, stats, topweek, ratings, comments, wall, and full search index
+  // Fast staged boot:
+  // 1) Initial 48 films + manifest load immediately in parallel
+  // 2) Pre-fetch top 4 stream manifests in background
+  // 3) Full 9,220-film index hydrates silently right after
   useEffect(() => {
     let cancelled = false;
-
     async function boot() {
-      setLoading(true);
       try {
-        const [manifestRes, filmsRes] = await Promise.allSettled([
+        const [mfRes, initialRes] = await Promise.allSettled([
           fetch('/api/manifest').then((r) => (r.ok ? r.json() : null)),
-          fetch('/api/films?limit=240&page=1').then((r) => (r.ok ? r.json() : null)),
+          fetch('/api/films?limit=60&page=1').then((r) => (r.ok ? r.json() : null)),
         ]);
 
-        if (!cancelled && manifestRes.status === 'fulfilled' && manifestRes.value) {
-          const mf = manifestRes.value;
-          if (mf.cats) setManifestCategories(mf.cats);
-          if (mf.genres) setManifestGenres(mf.genres);
-          setStats((prev) => ({
-            ...prev,
-            totalFilms: Number(mf.liveTotal || mf.total || prev.totalFilms),
-            newWeek: Number(mf.newLive || prev.newWeek),
-          }));
+        if (!cancelled && mfRes.status === 'fulfilled' && mfRes.value?.cats) {
+          setManifestCategories(mfRes.value.cats);
         }
 
-        if (!cancelled && filmsRes.status === 'fulfilled' && filmsRes.value) {
-          const items = Array.isArray(filmsRes.value.items)
-            ? filmsRes.value.items
-            : Array.isArray(filmsRes.value.films)
-              ? filmsRes.value.films
-              : Array.isArray(filmsRes.value)
-                ? filmsRes.value
-                : [];
-          if (items.length > 0) {
-            mergeFilmsIntoCatalog(items);
-          }
+        if (!cancelled && initialRes.status === 'fulfilled' && initialRes.value?.items) {
+          const items = initialRes.value.items as Film[];
+          mergeFilmsIntoCatalog(items);
+          items.slice(0, 4).forEach((f) => prefetchVideoStream(f.id));
         }
-      } catch {
-        // fallback continues below
       } finally {
         if (!cancelled) setLoading(false);
       }
 
-      // Secondary metadata fetches in parallel
+      // Secondary metadata
       Promise.allSettled([
         fetch('/api/stats').then((r) => (r.ok ? r.json() : null)),
-        fetch('/api/topweek').then((r) => (r.ok ? r.json() : null)),
         fetch('/api/hot').then((r) => (r.ok ? r.json() : null)),
         fetch('/api/ratings').then((r) => (r.ok ? r.json() : null)),
-        fetch('/api/comment-counts').then((r) => (r.ok ? r.json() : null)),
-        fetch('/api/wall').then((r) => (r.ok ? r.json() : null)),
-      ]).then((results) => {
+      ]).then((res) => {
         if (cancelled) return;
-        const [stRes, twRes, hotRes, rateRes, cmtRes, wallRes] = results;
-
-        if (stRes.status === 'fulfilled' && stRes.value) {
-          const s = stRes.value;
-          setStats((prev) => ({
-            online: Number(s.online || prev.online),
-            visits: Number(s.visits || prev.visits),
-            plays: Number(s.plays || prev.plays),
-            totalFilms: Number(s.totalFilms || prev.totalFilms),
-            newWeek: Number(s.newWeek || prev.newWeek),
-          }));
-        }
-        if (twRes.status === 'fulfilled' && twRes.value && Array.isArray(twRes.value.top)) {
-          setTopWeekRaw(twRes.value.top);
-        }
-        if (hotRes.status === 'fulfilled' && hotRes.value && hotRes.value.counts) {
-          setHotCounts(hotRes.value.counts);
-        }
-        if (rateRes.status === 'fulfilled' && rateRes.value && rateRes.value.ratings) {
-          setRatings(rateRes.value.ratings);
-        }
-        if (cmtRes.status === 'fulfilled' && cmtRes.value && cmtRes.value.counts) {
-          setCommentCounts(cmtRes.value.counts);
-        }
-        if (wallRes.status === 'fulfilled' && wallRes.value && Array.isArray(wallRes.value.posts)) {
-          setWallPosts(wallRes.value.posts);
-        }
+        const [st, ht, rt] = res;
+        if (st.status === 'fulfilled' && st.value?.online) setOnlineCount(Number(st.value.online));
+        if (ht.status === 'fulfilled' && ht.value?.counts) setHotCounts(ht.value.counts);
+        if (rt.status === 'fulfilled' && rt.value?.ratings) setRatings(rt.value.ratings);
       });
 
-      // Load full catalog search-index or larger film batch in background so all 9,220 films are instant
+      // Full catalog background hydration
       try {
         const fullRes = await fetch('/api/films?limit=10000&page=1');
         if (fullRes.ok) {
-          const fullData = await fullRes.json();
-          const list = Array.isArray(fullData.items)
-            ? fullData.items
-            : Array.isArray(fullData.films)
-              ? fullData.films
-              : [];
-          if (!cancelled && list.length > 0) {
-            mergeFilmsIntoCatalog(list);
-            return;
-          }
-        }
-      } catch {
-        // try static search-index fallback
-      }
-
-      try {
-        const idxRes = await fetch('/data/search-index.json');
-        if (idxRes.ok) {
-          const rows = await idxRes.json();
-          if (!cancelled && Array.isArray(rows)) {
-            const parsed: Film[] = rows.map((r: unknown[]) => ({
-              rank: Number(r[0]) || 0,
-              id: String(r[1] || ''),
-              title: String(r[2] || ''),
-              channel: String(r[3] || ''),
-              views: String(r[4] || ''),
-              dur: String(r[5] || ''),
-              cat: String(r[6] || 'fantasy'),
-              tool: String(r[7] || 'AI'),
-              blurb: String(r[8] || ''),
-              tags: Array.isArray(r[9]) ? (r[9] as string[]) : [],
-              adult: Boolean(r[10]),
-            }));
-            mergeFilmsIntoCatalog(parsed);
+          const fullJson = await fullRes.json();
+          if (!cancelled && Array.isArray(fullJson.items)) {
+            mergeFilmsIntoCatalog(fullJson.items);
           }
         }
       } catch {
@@ -280,20 +294,96 @@ export function App() {
       }
     }
 
-    boot();
+    void boot();
     return () => {
       cancelled = true;
     };
   }, [mergeFilmsIntoCatalog]);
 
+  // Sync activeFilm once catalog finishes hydrating for direct `/watch?v=...` entry
+  useEffect(() => {
+    if (!watchVideoId) return;
+    const match = allFilms.find((f) => f.id === watchVideoId);
+    if (match) {
+      setActiveFilm(match);
+    } else if (!activeFilm || activeFilm.id !== watchVideoId) {
+      fetch(`/api/films/${encodeURIComponent(watchVideoId)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.id) setActiveFilm(data as Film);
+        })
+        .catch(() => {});
+    }
+  }, [watchVideoId, allFilms]);
+
+  // Handle browser Back / Forward buttons cleanly
+  useEffect(() => {
+    const onPopState = () => {
+      const parsed = parseRouteFromLocation();
+      if (parsed.view === 'watch' && parsed.videoId) {
+        setSwipeOpen(false);
+        setRouteView('watch');
+        setWatchVideoId(parsed.videoId);
+        setWatchInitialTime(parsed.t);
+        const found = allFilms.find((f) => f.id === parsed.videoId);
+        if (found) setActiveFilm(found);
+      } else if (parsed.view === 'shorts') {
+        setRouteView('home');
+        setSwipeOpen(true);
+      } else {
+        setSwipeOpen(false);
+        setRouteView('home');
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [allFilms]);
+
   const setFilters = useCallback((patch: Partial<FilterState>) => {
     setFiltersState((prev) => ({ ...prev, ...patch }));
-    setShownCount(60);
+    setShownCount(24);
   }, []);
 
-  const resetFilters = useCallback(() => {
-    setFiltersState(DEFAULT_FILTERS);
-    setShownCount(60);
+  const recordHistory = useCallback((filmId: string) => {
+    setHistoryIds((prev) => {
+      const next = [filmId, ...prev.filter((id) => id !== filmId)].slice(0, 30);
+      try {
+        localStorage.setItem('phimaihot_history', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
+
+  // Open a film on the dedicated /watch?v=<id> page (0ms shallow pushState + optimistic metadata!)
+  const handleOpenWatch = useCallback(
+    (film: Film, seekSec = 0) => {
+      setSwipeOpen(false);
+      setIsSidebarOpen(false);
+      setActiveFilm(film);
+      setWatchVideoId(film.id);
+      setWatchInitialTime(seekSec);
+      setRouteView('watch');
+      recordHistory(film.id);
+      prefetchVideoStream(film.id);
+      const url = `/watch?v=${encodeURIComponent(film.id)}${seekSec > 0 ? `&t=${Math.floor(seekSec)}` : ''}`;
+      if (`${window.location.pathname}${window.location.search}` !== url) {
+        window.history.pushState({ view: 'watch', videoId: film.id }, '', url);
+      }
+      window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    },
+    [recordHistory]
+  );
+
+  const handleGoHome = useCallback(() => {
+    setSwipeOpen(false);
+    setRouteView('home');
+    setIsSidebarOpen(window.innerWidth > 1024);
+    if (window.location.pathname !== '/') {
+      window.history.pushState({ view: 'home' }, '', '/');
+    }
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   }, []);
 
   const toggleSave = useCallback((id: string) => {
@@ -310,372 +400,381 @@ export function App() {
     });
   }, []);
 
-  const handleOpenFilm = useCallback((film: Film) => {
-    setActiveFilm(film);
-    setHistoryIds((prev) => {
-      const next = [film.id, ...prev.filter((id) => id !== film.id)].slice(0, 24);
-      try {
-        localStorage.setItem('phimaihot_history', JSON.stringify(next));
-      } catch {
-        // ignore
-      }
-      return next;
-    });
-  }, []);
-
-  const handleOpenSwipeFeed = useCallback((startFilm?: Film) => {
-    setSwipeStartFilm(startFilm || null);
-    setSwipeOpen(true);
-  }, []);
-
-  const handleOpenAskAssistant = useCallback(() => {
-    setAskOpen(true);
-  }, []);
-
-  const handleOpenWatchParty = useCallback((film?: Film) => {
-    if (film) setWatchPartyFilm(film);
-    setWatchPartyOpen(true);
-  }, []);
-
-  // Compute categories & genres counts
-  const categories = useMemo(() => {
-    if (Object.keys(manifestCategories).length > 0) return manifestCategories;
-    const out: Record<string, number> = {};
-    for (const f of allFilms) {
-      out[f.cat] = (out[f.cat] || 0) + 1;
-    }
-    return out;
-  }, [manifestCategories, allFilms]);
-
-  const genres = useMemo(() => {
-    if (Object.keys(manifestGenres).length > 0) return manifestGenres;
-    const out: Record<string, number> = {};
-    for (const g of GENRE_GROUPS) {
-      out[g.id] = allFilms.filter((f) => genreMatch(f, g.id)).length;
-    }
-    return out;
-  }, [manifestGenres, allFilms]);
-
-  // Compute filtered & sorted films
+  // Filter & sort visible films
   const filteredFilms = useMemo(() => {
     const q = filters.query.trim().toLowerCase();
-    const rankMatch = q.match(/^#(\d+)$/);
-    if (rankMatch) {
-      const targetRank = parseInt(rankMatch[1], 10);
-      return allFilms.filter((f) => f.rank === targetRank);
-    }
-
-    let list = allFilms.filter((c) => {
-      // Sort-specific filter buckets
-      if (filters.sort === 'saved' && !savedIds.has(c.id)) return false;
-      if (filters.sort === 'history' && !historyIds.includes(c.id)) return false;
-
-      // Category filter
-      if (filters.cat && filters.cat !== 'all') {
-        if (filters.cat === 'saved') {
-          if (!savedIds.has(c.id)) return false;
-        } else if (filters.cat === 'history') {
-          if (!historyIds.includes(c.id)) return false;
-        } else if (filters.cat === 'new') {
-          if (c.rank < 9068) return false;
-        } else if (filters.cat === 'hot') {
-          // keep all, sorted below
-        } else if (filters.cat === 'topview') {
-          // keep all, sorted below
-        } else if (filters.cat === 'trung') {
-          if (c.cat !== 'trung' && c.cat !== 'hoathinh') return false;
-        } else if (c.cat !== filters.cat) {
-          return false;
-        }
-      }
-
-      // Channel filter
-      if (filters.channel && c.channel !== filters.channel) return false;
-
-      // Full-length only filter
-      if (filters.fullOnly && !/full|trọn/i.test(c.dur || '')) return false;
-
-      // Genre filter
-      if (filters.genre && filters.genre !== 'all' && !genreMatch(c, filters.genre)) {
-        return false;
-      }
-
-      // Mood filter
-      if (filters.mood && filters.mood !== 'all') {
-        const hay = `${c.title} ${c.blurb} ${c.blurbLong || ''}`.toLowerCase();
-        if (filters.mood === 'cuoi' || filters.mood === 'chill' || filters.mood === 'nhe') {
-          if (c.cat === 'kinhdi') return false;
-        } else if (filters.mood === 'khoc' || filters.mood === 'cam-dong') {
-          if (!['cảm động', 'nước mắt', 'gia đình', 'chữa lành', 'người mẹ', 'tình cảm'].some((k) => hay.includes(k))) {
-            return false;
-          }
-        } else if (filters.mood === 'rung' || filters.mood === 'cang-thang') {
-          if (c.cat !== 'kinhdi' && !['kinh dị', 'ám ảnh', 'quỷ', 'sinh tồn', 'mạt thế', 'đại chiến'].some((k) => hay.includes(k))) {
-            return false;
-          }
-        } else if (filters.mood === 'xuyendem' || filters.mood === 'hao-hung') {
-          if (durMinutes(c) < 60 && !['đại chiến', 'hào khí', 'tu tiên', 'nghịch thiên'].some((k) => hay.includes(k))) {
-            return false;
-          }
-        }
-      }
-
-      // Duration filter
-      if (filters.time && filters.time !== 'all') {
-        const m = durMinutes(c);
-        if (filters.time === 'short' && m > 30) return false;
-        if ((filters.time === 'u120' || filters.time === 'medium') && (m <= 30 || m > 120)) return false;
-        if ((filters.time === 'h24' || filters.time === 'long') && m <= 90) return false;
-        if ((filters.time === 'o240' || filters.time === 'marathon') && m < 120) return false;
-      }
-
-      // Family mode filter
-      if (filters.familyMode) {
-        if (c.adult || c.cat === 'kinhdi') return false;
-        if (/(quỷ|xác sống|kinh dị|ám ảnh|chết chóc|tận thế|ma cà rồng)/i.test(`${c.title} ${c.blurb}`)) {
-          return false;
-        }
-      }
-
-      // Search query filter
+    let list = allFilms.filter((f) => {
+      if (filters.familyMode && f.adult) return false;
+      if (filters.cat !== 'all' && f.cat !== filters.cat) return false;
+      if (filters.genre !== 'all' && !genreMatch(f, filters.genre)) return false;
+      if (filters.fullOnly && !/full|trọn/i.test(f.dur || '')) return false;
+      if (filters.channel && f.channel !== filters.channel) return false;
+      if (filters.sort === 'saved' && !savedIds.has(f.id)) return false;
+      if (filters.sort === 'history' && !historyIds.includes(f.id)) return false;
       if (q) {
-        const searchable = `${c.title} ${c.channel} ${c.tool} ${c.blurb} ${c.blurbLong || ''} ${CAT_LABEL[c.cat] || ''} ${(c.tags || []).join(' ')}`.toLowerCase();
-        if (!searchable.includes(q)) return false;
+        const hay = `${f.title} ${f.channel} ${f.blurb} ${(f.tags || []).join(' ')} ${f.tool}`.toLowerCase();
+        if (!hay.includes(q)) return false;
       }
-
       return true;
     });
 
-    // Sort order
-    const effectiveSort =
-      filters.cat === 'new' || filters.cat === 'hot' || filters.cat === 'topview' || filters.cat === 'history'
-        ? (filters.cat as FilterState['sort'])
-        : filters.sort;
-
-    if (effectiveSort === 'new') {
-      list = [...list].sort((a, b) => b.rank - a.rank);
-    } else if (effectiveSort === 'hot') {
-      list = [...list].sort((a, b) => (hotCounts[b.id] || 0) - (hotCounts[a.id] || 0) || b.rank - a.rank);
-    } else if (effectiveSort === 'topview') {
+    if (filters.sort === 'hot') {
+      list = [...list].sort((a, b) => (hotCounts[b.id] || 0) - (hotCounts[a.id] || 0) || viewsNumber(b) - viewsNumber(a));
+    } else if (filters.sort === 'topview') {
       list = [...list].sort((a, b) => viewsNumber(b) - viewsNumber(a));
-    } else if (effectiveSort === 'history') {
-      const orderMap = new Map(historyIds.map((id, i) => [id, i]));
-      list = [...list].sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
+    } else if (filters.sort === 'history') {
+      const order = new Map(historyIds.map((id, idx) => [id, idx]));
+      list = [...list].sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
+    } else {
+      list = [...list].sort((a, b) => b.rank - a.rank);
     }
 
     return list;
   }, [allFilms, filters, savedIds, historyIds, hotCounts]);
 
-  const visibleFilms = useMemo(
-    () => filteredFilms.slice(0, shownCount),
-    [filteredFilms, shownCount]
-  );
+  const visibleFilms = useMemo(() => filteredFilms.slice(0, shownCount), [filteredFilms, shownCount]);
+  const hasMore = shownCount < filteredFilms.length;
 
-  // Hero films (featured full-length & high-craft AI films)
-  const heroFilms = useMemo(() => {
-    const fulls = allFilms.filter((f) => /full|trọn/i.test(f.dur || '') && !f.adult);
-    return (fulls.length >= 6 ? fulls : allFilms).slice(0, 6);
-  }, [allFilms]);
-
-  // Top 10 Weekly films
-  const topWeekFilms = useMemo(() => {
-    const byId = new Map(allFilms.map((f) => [f.id, f]));
-    const mapped: Array<{ film: Film; count: number }> = [];
-    for (const item of topWeekRaw) {
-      const f = byId.get(item.id);
-      if (f) mapped.push({ film: f, count: Number(item.count) || 0 });
-    }
-    if (mapped.length < 10) {
-      for (const f of allFilms.slice(0, 15)) {
-        if (mapped.length >= 10) break;
-        if (!mapped.some((x) => x.film.id === f.id)) {
-          mapped.push({ film: f, count: hotCounts[f.id] || Math.max(12, Math.floor(viewsNumber(f) / 1000)) });
+  // Infinite scroll on homepage grid
+  useEffect(() => {
+    if (routeView !== 'home' || !hasMore) return;
+    const el = loadMoreTriggerRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setShownCount((c) => Math.min(filteredFilms.length, c + 24));
         }
-      }
-    }
-    return mapped.slice(0, 10);
-  }, [allFilms, topWeekRaw, hotCounts]);
-
-  // Continue watching films
-  const continueFilms = useMemo(() => {
-    const byId = new Map(allFilms.map((f) => [f.id, f]));
-    return historyIds
-      .map((id) => byId.get(id))
-      .filter((f): f is Film => Boolean(f))
-      .slice(0, 10);
-  }, [allFilms, historyIds]);
-
-  // Pinned spotlight films (Vietnamese historical & top international AI studios)
-  const pinnedFilms = useMemo(() => {
-    const vnAndEpic = allFilms.filter(
-      (f) => f.cat === 'vietnam' || /MYTHRA|Thước Phim Sử Việt|Lõi Phim AI|Veo|Sora/i.test(`${f.channel} ${f.tool}`)
+      },
+      { rootMargin: '320px' }
     );
-    return (vnAndEpic.length >= 6 ? vnAndEpic : allFilms).slice(0, 8);
-  }, [allFilms]);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [routeView, hasMore, filteredFilms.length]);
 
-  const handleRandomFilm = useCallback(() => {
-    const pool = filteredFilms.length > 0 ? filteredFilms : allFilms;
-    if (pool.length === 0) return;
-    const pick = pool[Math.floor(Math.random() * pool.length)];
-    if (pick) handleOpenFilm(pick);
-  }, [filteredFilms, allFilms, handleOpenFilm]);
+  const categories = useMemo(() => {
+    if (Object.keys(manifestCategories).length > 0) return manifestCategories;
+    const out: Record<string, number> = {};
+    for (const f of allFilms) out[f.cat] = (out[f.cat] || 0) + 1;
+    return out;
+  }, [manifestCategories, allFilms]);
 
-  const handlePostWall = useCallback(async (name: string, text: string) => {
-    const cleanText = text.trim();
-    if (!cleanText) return;
-    const cleanName = name.trim() || 'Khán giả';
-    try {
-      localStorage.setItem('phimaihot_nick', cleanName);
-    } catch {
-      // ignore
+  // Quick filter chips for kv-tube .yt-chip-bar
+  const quickChips = [
+    { id: 'all', label: 'Tất cả', active: filters.cat === 'all' && filters.genre === 'all' && filters.sort !== 'hot' && !filters.fullOnly && !filters.channel },
+    { id: 'hot', label: 'Đang thịnh hành', active: filters.sort === 'hot' },
+    { id: 'full', label: 'Trọn bộ FULL', active: filters.fullOnly },
+    { id: 'cat:trung', label: CAT_LABEL.trung, active: filters.cat === 'trung' },
+    { id: 'cat:hoathinh', label: CAT_LABEL.hoathinh, active: filters.cat === 'hoathinh' },
+    { id: 'cat:fantasy', label: CAT_LABEL.fantasy, active: filters.cat === 'fantasy' },
+    { id: 'cat:scifi', label: CAT_LABEL.scifi, active: filters.cat === 'scifi' },
+    { id: 'cat:kinhdi', label: CAT_LABEL.kinhdi, active: filters.cat === 'kinhdi' },
+    { id: 'cat:vietnam', label: CAT_LABEL.vietnam, active: filters.cat === 'vietnam' },
+    ...GENRE_GROUPS.slice(0, 6).map((g) => ({
+      id: `genre:${g.id}`,
+      label: g.label,
+      active: filters.genre === g.id,
+    })),
+  ];
+
+  const handleChipClick = (chipId: string) => {
+    if (chipId === 'all') {
+      setFilters(DEFAULT_FILTERS);
+    } else if (chipId === 'hot') {
+      setFilters({ sort: filters.sort === 'hot' ? 'random' : 'hot' });
+    } else if (chipId === 'full') {
+      setFilters({ fullOnly: !filters.fullOnly });
+    } else if (chipId.startsWith('cat:')) {
+      const cat = chipId.slice(4);
+      setFilters({ cat: filters.cat === cat ? 'all' : cat, genre: 'all' });
+    } else if (chipId.startsWith('genre:')) {
+      const g = chipId.slice(6);
+      setFilters({ genre: filters.genre === g ? 'all' : g });
     }
-
-    const optimisticPost = {
-      id: `local-${Date.now()}`,
-      name: cleanName,
-      text: cleanText,
-      ts: Date.now(),
-      likes: 0,
-    };
-    setWallPosts((prev) => [optimisticPost, ...prev]);
-
-    try {
-      const r = await fetch('/api/wall', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: cleanName, text: cleanText }),
-      });
-      if (r.ok) {
-        const w = await fetch('/api/wall').then((res) => (res.ok ? res.json() : null));
-        if (w && Array.isArray(w.posts)) {
-          setWallPosts(w.posts);
-        }
-      }
-    } catch {
-      // keep optimistic
-    }
-  }, []);
-
-  const handleLikeWall = useCallback(async (id: string) => {
-    setWallPosts((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, likes: (p.likes || 0) + 1 } : p))
-    );
-    try {
-      await fetch('/api/wall-like', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      });
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  const handleRateFilm = useCallback(async (id: string, stars: number) => {
-    setRatings((prev) => {
-      const cur = prev[id] || { s: 0, n: 0 };
-      return {
-        ...prev,
-        [id]: { s: cur.s + stars, n: cur.n + 1 },
-      };
-    });
-    try {
-      const r = await fetch('/api/rate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, stars }),
-      });
-      const j = await r.json().catch(() => null);
-      if (j && j.rating) {
-        setRatings((prev) => ({ ...prev, [id]: j.rating }));
-      }
-    } catch {
-      // keep optimistic rating
-    }
-  }, []);
-
-  const handleLoadMore = useCallback(() => {
-    setShownCount((prev) => prev + 60);
-  }, []);
-
-  const interfaceProps: PhimAIInterfaceProps = {
-    films: visibleFilms,
-    totalFilms: filteredFilms.length || stats.totalFilms,
-    heroFilms,
-    topWeekFilms,
-    continueFilms,
-    pinnedFilms,
-    categories,
-    genres,
-    stats,
-    wallPosts,
-    filters,
-    setFilters,
-    resetFilters,
-    savedIds,
-    toggleSave,
-    ratings,
-    commentCounts,
-    onOpenFilm: handleOpenFilm,
-    onOpenSwipeFeed: handleOpenSwipeFeed,
-    onOpenAskAssistant: handleOpenAskAssistant,
-    onOpenWatchParty: handleOpenWatchParty,
-    onRandomFilm: handleRandomFilm,
-    onPostWall: handlePostWall,
-    onLikeWall: handleLikeWall,
-    onLoadMore: handleLoadMore,
-    hasMore: shownCount < filteredFilms.length,
-    loading,
-    getThumbUrl,
-    getKVTubeWatchUrl,
-    activePartyCode: partyCode,
   };
 
-  return (
-    <div className="min-h-screen flex flex-col bg-[#0d0e14]">
-      <main className="flex-1">
-        <InterfaceOne {...interfaceProps} />
-      </main>
+  // Determine next/prev film for watch page playback controls
+  const currentFilmIndex = useMemo(
+    () => (activeFilm ? filteredFilms.findIndex((f) => f.id === activeFilm.id) : -1),
+    [activeFilm, filteredFilms]
+  );
 
-      <PlayerModal
-        film={activeFilm}
+  const handleNextFilm = useCallback(() => {
+    if (filteredFilms.length === 0) return;
+    const nextIdx = currentFilmIndex >= 0 ? (currentFilmIndex + 1) % filteredFilms.length : 0;
+    handleOpenWatch(filteredFilms[nextIdx]);
+  }, [filteredFilms, currentFilmIndex, handleOpenWatch]);
+
+  const handlePrevFilm = useCallback(() => {
+    if (filteredFilms.length === 0) return;
+    const prevIdx = currentFilmIndex > 0 ? currentFilmIndex - 1 : filteredFilms.length - 1;
+    handleOpenWatch(filteredFilms[prevIdx]);
+  }, [filteredFilms, currentFilmIndex, handleOpenWatch]);
+
+  const isWatchMode = routeView === 'watch' && Boolean(activeFilm);
+
+  return (
+    <div style={{ minHeight: '100vh', backgroundColor: 'var(--yt-background)', color: 'var(--yt-text-primary)' }}>
+      {/* Top Sticky Materialious Header */}
+      <Header
+        query={filters.query}
+        onQueryChange={(q) => {
+          setFilters({ query: q });
+          if (isWatchMode && q.trim()) handleGoHome();
+        }}
+        onSubmitSearch={(q) => {
+          setFilters({ query: q });
+          handleGoHome();
+        }}
+        onToggleSidebar={() => setIsSidebarOpen((v) => !v)}
+        onGoHome={() => {
+          setFilters(DEFAULT_FILTERS);
+          handleGoHome();
+        }}
+        onOpenShorts={() => setSwipeOpen(true)}
+        onOpenAssistant={() => setAskOpen(true)}
+        onOpenWatchParty={() => {
+          setWatchPartyFilm(activeFilm || filteredFilms[0] || allFilms[0] || null);
+          setWatchPartyOpen(true);
+        }}
+        theme={theme}
+        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         allFilms={allFilms}
-        savedIds={savedIds}
-        onToggleSave={toggleSave}
-        ratings={ratings}
-        onRateFilm={handleRateFilm}
-        onSelectFilm={handleOpenFilm}
-        onClose={() => setActiveFilm(null)}
-        onOpenWatchParty={(film) => handleOpenWatchParty(film)}
-        onOpenSwipeFeed={(film) => handleOpenSwipeFeed(film)}
-        activePartyCode={partyCode}
-        isPartyHost={isPartyHost}
+        onSelectFilm={(f) => handleOpenWatch(f)}
+        onlineCount={onlineCount}
       />
 
+      {/* Collapsible Sidebar (Desktop rail or Overlay drawer) */}
+      <Sidebar
+        isOpen={isSidebarOpen}
+        isOverlayMode={isWatchMode || isMobileViewport}
+        onClose={() => setIsSidebarOpen(false)}
+        filters={filters}
+        categories={categories}
+        onSelectFilter={(patch) => setFilters(patch)}
+        onGoHome={handleGoHome}
+        onOpenShorts={() => setSwipeOpen(true)}
+        onOpenAssistant={() => setAskOpen(true)}
+        onOpenWatchParty={() => {
+          setWatchPartyFilm(activeFilm || filteredFilms[0] || allFilms[0] || null);
+          setWatchPartyOpen(true);
+        }}
+      />
+
+      {/* Main Content Area */}
+      <main
+        className={`yt-main-content ${
+          isWatchMode
+            ? 'watch-mode'
+            : isSidebarOpen && !isMobileViewport
+              ? 'sidebar-expanded'
+              : 'sidebar-collapsed'
+        }`}
+      >
+        {isWatchMode && activeFilm ? (
+          <WatchPage
+            film={activeFilm}
+            allFilms={allFilms}
+            currentTimeSec={currentPlaySec}
+            saved={savedIds.has(activeFilm.id)}
+            rating={ratings[activeFilm.id]}
+            onToggleSave={toggleSave}
+            onSelectFilm={(f) => handleOpenWatch(f)}
+            onBackHome={handleGoHome}
+            onFilterByPatch={(patch) => {
+              setFilters(patch);
+              handleGoHome();
+            }}
+            onOpenWatchParty={(f) => {
+              setWatchPartyFilm(f);
+              setWatchPartyOpen(true);
+            }}
+            onSeekToSec={(sec) => setExternalSeekSec({ sec, nonce: Date.now() })}
+            onRateSuccess={(id, nextRating) => setRatings((prev) => ({ ...prev, [id]: nextRating }))}
+          />
+        ) : (
+          <div className="yt-home-grid-wrapper">
+            {/* Sticky Category / Genre Chip Bar */}
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '18px', position: 'relative' }}>
+              <div ref={chipBarRef} className="yt-chip-bar" style={{ flex: 1 }}>
+                {quickChips.map((chip) => (
+                  <button
+                    type="button"
+                    key={chip.id}
+                    onClick={() => handleChipClick(chip.id)}
+                    className={`yt-filter-chip ${chip.active ? 'active' : ''}`}
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+                {filters.channel && (
+                  <button
+                    type="button"
+                    onClick={() => setFilters({ channel: '' })}
+                    className="yt-filter-chip active"
+                  >
+                    Kênh: {filters.channel} ✕
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => chipBarRef.current?.scrollBy({ left: 220, behavior: 'smooth' })}
+                className="hidden-mobile"
+                style={{
+                  background: 'var(--yt-hover)',
+                  border: 'none',
+                  color: 'var(--yt-text-primary)',
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  marginLeft: '8px',
+                  flexShrink: 0,
+                }}
+                title="Xem thêm thẻ"
+              >
+                <IoChevronForward size={16} />
+              </button>
+            </div>
+
+            {/* Active Result Summary */}
+            {(filters.query || filters.channel || filters.sort === 'saved' || filters.sort === 'history') && (
+              <div style={{ marginBottom: '14px', fontSize: '13.5px', color: 'var(--yt-text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>
+                  Tìm thấy <strong style={{ color: 'var(--yt-text-primary)' }}>{filteredFilms.length}</strong> bộ phim
+                  {filters.channel ? ` từ kênh "${filters.channel}"` : ''}
+                  {filters.query ? ` cho "${filters.query}"` : ''}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setFilters(DEFAULT_FILTERS)}
+                  style={{ background: 'none', border: 'none', color: 'var(--yt-blue)', cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Đặt lại bộ lọc
+                </button>
+              </div>
+            )}
+
+            {/* Video Card Grid */}
+            {loading && visibleFilms.length === 0 ? (
+              <div className="yt-home-video-grid">
+                {Array.from({ length: 12 }).map((_, i) => (
+                  <div key={i} className="skeleton" style={{ aspectRatio: '16/9', borderRadius: '12px' }} />
+                ))}
+              </div>
+            ) : visibleFilms.length === 0 ? (
+              <div style={{ padding: '48px 16px', textAlign: 'center', color: 'var(--yt-text-secondary)' }}>
+                <p style={{ fontSize: '16px', marginBottom: '12px' }}>Không tìm thấy phim phù hợp.</p>
+                <button
+                  type="button"
+                  onClick={() => setFilters(DEFAULT_FILTERS)}
+                  className="watch-sub-btn unsubscribed"
+                  style={{ height: '38px', padding: '0 20px' }}
+                >
+                  Xem toàn bộ {allFilms.length} phim
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="yt-home-video-grid">
+                  {visibleFilms.map((film) => (
+                    <VideoCard
+                      key={film.id}
+                      film={film}
+                      saved={savedIds.has(film.id)}
+                      onToggleSave={toggleSave}
+                      onOpenFilm={(f) => handleOpenWatch(f)}
+                      onFilterChannel={(ch) => setFilters({ channel: ch })}
+                    />
+                  ))}
+                </div>
+                {hasMore && (
+                  <div ref={loadMoreTriggerRef} style={{ padding: '28px', textAlign: 'center' }}>
+                    <button
+                      type="button"
+                      onClick={() => setShownCount((c) => c + 30)}
+                      className="watch-action-pill"
+                    >
+                      Tải thêm phim ({filteredFilms.length - visibleFilms.length} phim còn lại)
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </main>
+
+      {/* Mobile Bottom Navigation */}
+      <MobileNav
+        activeView={swipeOpen ? 'shorts' : isWatchMode ? 'watch' : 'home'}
+        activeSort={filters.sort}
+        onSelectHome={() => {
+          setFilters(DEFAULT_FILTERS);
+          handleGoHome();
+        }}
+        onSelectHot={() => {
+          setFilters({ sort: 'hot' });
+          handleGoHome();
+        }}
+        onSelectShorts={() => setSwipeOpen(true)}
+        onSelectSaved={() => {
+          setFilters({ sort: 'saved' });
+          handleGoHome();
+        }}
+        onOpenAssistant={() => setAskOpen(true)}
+      />
+
+      {/* Persistent Player: mounts inside #watch-player-slot on /watch or docks as mini-player on / */}
+      <PersistentPlayer
+        activeFilm={activeFilm}
+        isWatchPage={isWatchMode}
+        initialTimeSec={watchInitialTime}
+        sleepMinutes={sleepMinutes}
+        onSelectSleepMinutes={setSleepMinutes}
+        onNext={handleNextFilm}
+        onPrev={handlePrevFilm}
+        onVideoEnd={handleNextFilm}
+        onTimeUpdate={setCurrentPlaySec}
+        onExpandToWatch={(f, cur) => handleOpenWatch(f, cur)}
+        onCloseMiniPlayer={() => {
+          setActiveFilm(null);
+          setWatchVideoId('');
+        }}
+        externalSeekSec={externalSeekSec}
+      />
+
+      {/* Shorts Vertical Swipe Feed */}
       <SwipeFeedModal
         isOpen={swipeOpen}
-        startFilm={swipeStartFilm}
+        startFilm={activeFilm || filteredFilms[0] || allFilms[0] || null}
         films={filteredFilms.length > 0 ? filteredFilms : allFilms}
         savedIds={savedIds}
         onToggleSave={toggleSave}
-        onOpenFullPlayer={(film) => {
-          setSwipeOpen(false);
-          handleOpenFilm(film);
-        }}
+        onOpenFullPlayer={(f) => handleOpenWatch(f)}
         onClose={() => setSwipeOpen(false)}
       />
 
+      {/* AI Film Assistant */}
       <AskAssistantModal
         isOpen={askOpen}
         films={allFilms}
-        onOpenFilm={handleOpenFilm}
-        onApplyFilters={setFilters}
+        onOpenFilm={(f) => handleOpenWatch(f)}
+        onApplyFilters={(patch) => {
+          setFilters(patch);
+          handleGoHome();
+        }}
         onClose={() => setAskOpen(false)}
       />
 
+      {/* Watch Party & TV Pair */}
       <WatchPartyModal
         isOpen={watchPartyOpen}
-        activeFilm={watchPartyFilm || activeFilm || heroFilms[0] || null}
+        activeFilm={watchPartyFilm || activeFilm}
         films={allFilms}
         partyCode={partyCode}
         isHost={isPartyHost}
@@ -683,11 +782,11 @@ export function App() {
           setPartyCode(code);
           setIsPartyHost(host);
           if (filmId) {
-            const matched = allFilms.find((f) => f.id === filmId);
-            if (matched) handleOpenFilm(matched);
+            const match = allFilms.find((f) => f.id === filmId);
+            if (match) handleOpenWatch(match);
           }
         }}
-        onOpenFilm={handleOpenFilm}
+        onOpenFilm={(f) => handleOpenWatch(f)}
         onClose={() => setWatchPartyOpen(false)}
       />
     </div>

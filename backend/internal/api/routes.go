@@ -13,11 +13,21 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 	r.Get("/films/{id}", h.GetFilmDetail)
 	r.Get("/channels", h.GetChannels)
 
-	// KV-Tube Integration (https://u.khoavo.vndns.net)
+	// Native Invidious / Companion Same-Origin Proxy Architecture + Video Stream Engine
+	r.HandleFunc("/invidious", h.ProxyInvidious)
+	r.HandleFunc("/invidious/*", h.ProxyInvidious)
+	r.Get("/video/{id}", h.GetKVTubeVideo)
+	r.Get("/stream/{id}", h.StreamKVTubeVideo)
+	r.Head("/stream/{id}", h.StreamKVTubeVideo)
+	r.Get("/thumb/{id}", h.GetKVTubeThumb)
+	r.Head("/thumb/{id}", h.GetKVTubeThumb)
+
+	// Backward-compatible stream & thumbnail aliases
 	r.Get("/kvtube/video/{id}", h.GetKVTubeVideo)
 	r.Get("/kvtube/stream/{id}", h.StreamKVTubeVideo)
 	r.Head("/kvtube/stream/{id}", h.StreamKVTubeVideo)
 	r.Get("/kvtube/thumb/{id}", h.GetKVTubeThumb)
+	r.Head("/kvtube/thumb/{id}", h.GetKVTubeThumb)
 
 	// Site Telemetry & Presence
 	r.Get("/stats", h.GetStats)

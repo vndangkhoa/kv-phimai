@@ -165,13 +165,11 @@ func (c *Catalog) enrichFilm(f *models.Film) {
 		f.Tags = []string{}
 	}
 	f.ThumbnailURL = "/api/kvtube/thumb/" + f.ID
-	f.WatchURL = c.KVTubeURL + "/watch?v=" + f.ID
-	f.EmbedURL = c.KVTubeURL + "/embed/" + f.ID
-	f.StreamURL = "/api/kvtube/stream/" + f.ID
-	if cid, ok := c.ChannelIDs[f.Channel]; ok && cid != "" {
-		f.ChannelURL = c.KVTubeURL + "/channel/" + cid
-	} else if f.Channel != "" {
-		f.ChannelURL = c.KVTubeURL + "/search?q=" + url.QueryEscape(f.Channel)
+	f.WatchURL = "/watch?v=" + f.ID
+	f.EmbedURL = "/watch?v=" + f.ID
+	f.StreamURL = "/api/invidious/latest_version?id=" + f.ID + "&itag=18&local=true"
+	if f.Channel != "" {
+		f.ChannelURL = "/?channel=" + url.QueryEscape(f.Channel)
 	}
 	f.ViewsNum = parseViewsNum(f.Views)
 	f.DurMins = parseDurMinutes(f.Dur, f.Cat)

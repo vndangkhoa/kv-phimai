@@ -27,8 +27,11 @@ func main() {
 
 	db := database.InitDB(cfg.DatabaseURL, cfg.DataDir)
 	cat := catalog.NewCatalog(cfg.DataDir, cfg.KVTubeURL)
-	kvt := kvtube.NewService(cfg.KVTubeURL)
+	kvt := kvtube.NewService(cfg.KVTubeURL, cfg.InvidiousUpstream)
 	handler := api.NewHandler(db, cat, kvt)
+
+	// Pre-warm stream metadata for the top featured films in background
+	go kvt.Prewarm(cat.Films, 8)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -48,21 +51,33 @@ func main() {
 		api.RegisterRoutes(r, handler)
 	})
 
+	// Safety net: also route /companion/* and /videoplayback* at root through same-origin proxy
+	r.HandleFunc("/companion/*", func(w http.ResponseWriter, r *http.Request) {
+		r.URL.Path = "/api/invidious" + r.URL.Path
+		kvt.ProxyInvidious(w, r)
+	})
+	r.HandleFunc("/videoplayback", func(w http.ResponseWriter, r *http.Request) {
+		r.URL.Path = "/api/invidious" + r.URL.Path
+		kvt.ProxyInvidious(w, r)
+	})
+
 	// Static /data/* JSON catalog files
 	dataFS := http.StripPrefix("/data/", http.FileServer(http.Dir(cfg.DataDir)))
-	r.Get("/data/*", func(w http.ResponseWriter, r *http.Request) {
+	serveData := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		dataFS.ServeHTTP(w, r)
-	})
+	}
+	r.Get("/data/*", serveData)
+	r.Head("/data/*", serveData)
 
 	// SPA Frontend Static Server (dynamically resolves ../frontend/dist or ./dist)
-	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+	serveSPA := func(w http.ResponseWriter, r *http.Request) {
 		frontendDir := resolveFrontendDir()
 		if frontendDir == "" {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"service":"kv-phimai","status":"backend-ready","message":"Frontend dist not built yet"}`))
+			_, _ = w.Write([]byte(`{"service":"phimai","status":"backend-ready","message":"Frontend dist not built yet"}`))
 			return
 		}
 
@@ -99,7 +114,9 @@ func main() {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeContent(w, r, "index.html", info.ModTime(), indexFile)
-	})
+	}
+	r.Get("/*", serveSPA)
+	r.Head("/*", serveSPA)
 
 	srv := &http.Server{
 		Addr:        ":" + cfg.Port,

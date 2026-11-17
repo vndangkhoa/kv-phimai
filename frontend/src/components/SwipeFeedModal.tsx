@@ -4,8 +4,6 @@ import {
   BookmarkCheck,
   ChevronDown,
   ChevronUp,
-  ExternalLink,
-  Layers,
   Maximize2,
   Pause,
   Play,
@@ -22,9 +20,7 @@ import type { Film } from '../types/phimai';
 import {
   CAT_LABEL,
   formatViewsVN,
-  getKVTubeEmbedUrl,
   getKVTubeStreamUrl,
-  getKVTubeWatchUrl,
   getThumbUrl,
   isAgeVerified,
 } from '../utils/phimaiUtils';
@@ -66,7 +62,6 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
   const [muted, setMuted] = useState<boolean>(false);
   const [paused, setPaused] = useState<boolean>(false);
   const [progress, setProgress] = useState<number>(0);
-  const [useEmbed, setUseEmbed] = useState<boolean>(false);
 
   // Build the feed queue when the overlay opens
   useEffect(() => {
@@ -82,7 +77,6 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
     setCurrentIndex(0);
     setProgress(0);
     setPaused(false);
-    setUseEmbed(false);
   }, [isOpen, startFilm, films]);
 
   const currentFilm = feedQueue[currentIndex] || null;
@@ -131,7 +125,7 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
     }).catch(() => {});
 
     const v = videoRef.current;
-    if (v && !useEmbed) {
+    if (v) {
       v.currentTime = 0;
       v.play().catch(() => {
         // Browser blocked unmuted autoplay: retry muted
@@ -140,7 +134,7 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
         v.play().catch(() => {});
       });
     }
-  }, [isOpen, currentFilm, useEmbed]);
+  }, [isOpen, currentFilm]);
 
   const open = isOpen && currentFilm !== null;
 
@@ -160,7 +154,7 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
 
   const togglePlayPause = () => {
     const v = videoRef.current;
-    if (!v || useEmbed) return;
+    if (!v) return;
     if (v.paused) {
       v.play().catch(() => {});
       setPaused(false);
@@ -198,23 +192,11 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
         className="kv-touch"
       />
     );
-    const kvtubeLink = (
-      <Button
-        label="KV-Tube"
-        icon={<ExternalLink {...ICON} aria-hidden="true" />}
-        href={getKVTubeWatchUrl(film.id)}
-        target="_blank"
-        rel="noopener noreferrer"
-        width={isPhone ? '100%' : undefined}
-        className="kv-touch"
-      />
-    );
     const playBtn = (
       <IconButton
         label={paused ? 'Phát' : 'Tạm dừng'}
         icon={paused ? <Play {...ICON_LG} aria-hidden="true" /> : <Pause {...ICON_LG} aria-hidden="true" />}
         onClick={togglePlayPause}
-        isDisabled={useEmbed}
         className="kv-touch-square"
       />
     );
@@ -223,7 +205,6 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
         label={muted ? 'Bật tiếng' : 'Tắt tiếng'}
         icon={muted ? <VolumeX {...ICON_LG} aria-hidden="true" /> : <Volume2 {...ICON_LG} aria-hidden="true" />}
         onClick={() => setMuted((v) => !v)}
-        isDisabled={useEmbed}
         className="kv-touch-square"
       />
     );
@@ -258,14 +239,6 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
             </span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Button
-              label={useEmbed ? 'Đang nhúng KV-Tube' : 'Nhúng KV-Tube'}
-              tooltip="Chuyển giữa luồng trực tiếp và trình phát nhúng KV-Tube"
-              aria-pressed={useEmbed}
-              onClick={() => setUseEmbed((v) => !v)}
-              icon={<Layers {...ICON} aria-hidden="true" />}
-              className="kv-touch"
-            />
             <IconButton
               label="Đóng chế độ lướt dọc"
               icon={<X {...ICON_LG} aria-hidden="true" />}
@@ -283,32 +256,22 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
         >
           <div className="relative flex min-h-0 w-full max-w-5xl flex-col overflow-hidden bg-black sm:rounded-2xl sm:border sm:border-[#f4f4f6]/15 sm:shadow-[0_24px_64px_-16px_rgba(0,0,0,0.85)]">
             <div className="relative min-h-0 flex-1 bg-black" onClick={togglePlayPause}>
-              {useEmbed ? (
-                <iframe
-                  src={getKVTubeEmbedUrl(film.id)}
-                  title={`KV-Tube: ${film.title}`}
-                  className="h-full w-full border-0"
-                  allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                />
-              ) : (
-                <video
-                  ref={videoRef}
-                  src={getKVTubeStreamUrl(film.id)}
-                  poster={getThumbUrl(film.id)}
-                  muted={muted}
-                  playsInline
-                  autoPlay
-                  aria-label={`Đang phát: ${film.title}`}
-                  onTimeUpdate={(e) => {
-                    const v = e.currentTarget;
-                    if (v.duration > 0) setProgress((v.currentTime / v.duration) * 100);
-                  }}
-                  onEnded={goNext}
-                  className="h-full w-full object-contain"
-                />
-              )}
-              {paused && !useEmbed && (
+              <video
+                ref={videoRef}
+                src={getKVTubeStreamUrl(film.id)}
+                poster={getThumbUrl(film.id)}
+                muted={muted}
+                playsInline
+                autoPlay
+                aria-label={`Đang phát: ${film.title}`}
+                onTimeUpdate={(e) => {
+                  const v = e.currentTarget;
+                  if (v.duration > 0) setProgress((v.currentTime / v.duration) * 100);
+                }}
+                onEnded={goNext}
+                className="h-full w-full object-contain"
+              />
+              {paused && (
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/35">
                   <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#ffd875] text-[#0d0e14]">
                     <Play className="h-7 w-7 translate-x-0.5" strokeWidth={2} aria-hidden="true" />
@@ -362,19 +325,11 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
 
                 {isPhone ? (
                   <div className="space-y-2">
-                    <div className="grid grid-cols-5 gap-2" role="group" aria-label="Điều khiển phát">
+                    <div className="grid grid-cols-4 gap-2" role="group" aria-label="Điều khiển phát">
                       {prevBtn}
                       {playBtn}
                       {muteBtn}
                       {nextBtn}
-                      <IconButton
-                        label="Xem trên KV-Tube"
-                        icon={<ExternalLink {...ICON_LG} aria-hidden="true" />}
-                        href={getKVTubeWatchUrl(film.id)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="kv-touch-square"
-                      />
                     </div>
                     <div className="grid grid-cols-2 gap-2" role="group" aria-label="Thao tác với phim">
                       {saveToggle}
@@ -387,7 +342,6 @@ export const SwipeFeedModal: React.FC<SwipeFeedModalProps> = ({
                     {muteBtn}
                     {saveToggle}
                     {openFull}
-                    {kvtubeLink}
                   </div>
                 )}
               </div>

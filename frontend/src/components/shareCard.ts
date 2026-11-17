@@ -95,11 +95,11 @@ export async function drawShareCard(canvas: HTMLCanvasElement, film: Film): Prom
 
   ctx.fillStyle = '#ffd875';
   ctx.font = 'bold 44px sans-serif';
-  ctx.fillText('KV-PhimAI • u.khoavo.vndns.net', 64, 1740);
+  ctx.fillText('PhimAI • Rạp Phim AI 4K', 64, 1740);
 
   ctx.fillStyle = '#b4b8c8';
   ctx.font = '32px monospace';
-  ctx.fillText(getKVTubeWatchUrl(film.id), 64, 1805);
+  ctx.fillText(`/watch?v=${film.id}`, 64, 1805);
 
   return true;
 }

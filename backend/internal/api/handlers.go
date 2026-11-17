@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -91,20 +92,18 @@ func (h *Handler) GetHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":     "healthy",
 		"ok":         true,
-		"service":    "kv-phimai",
-		"version":    "1.0.0",
-		"kvtubeUrl":  h.KVTube.BaseURL,
+		"service":    "phimai",
+		"version":    "1.0.2",
 		"totalFilms": len(h.Catalog.Films),
 		"liveFilms":  liveTotal,
 	})
 }
 
 func (h *Handler) GetManifest(w http.ResponseWriter, r *http.Request) {
-	out := make(map[string]interface{}, len(h.Catalog.Manifest)+3)
+	out := make(map[string]interface{}, len(h.Catalog.Manifest)+2)
 	for k, v := range h.Catalog.Manifest {
 		out[k] = v
 	}
-	out["kvtubeUrl"] = h.KVTube.BaseURL
 	out["playlists"] = h.Catalog.Playlists
 	writeJSON(w, http.StatusOK, out)
 }
@@ -247,8 +246,12 @@ func (h *Handler) GetFilmDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. KV-TUBE STREAMING & THUMBNAIL PROXY (https://u.khoavo.vndns.net)
+// 3. NATIVE SAME-ORIGIN INVIDIOUS / COMPANION PROXY & VIDEO ENGINE
 // ---------------------------------------------------------------------------
+
+func (h *Handler) ProxyInvidious(w http.ResponseWriter, r *http.Request) {
+	h.KVTube.ProxyInvidious(w, r)
+}
 
 func (h *Handler) GetKVTubeVideo(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
@@ -258,11 +261,15 @@ func (h *Handler) GetKVTubeVideo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var fallbackPtr *models.Film
+	var related []models.Film
+	var series []models.Film
 	if f, ok := h.Catalog.GetFilmByID(id); ok {
 		fallbackPtr = &f
+		related = h.Catalog.GetRelated(f, 16)
+		series = h.Catalog.GetSeries(id)
 	}
 
-	info := h.KVTube.GetVideo(r.Context(), id, fallbackPtr, h.Catalog.ChannelIDs)
+	info := h.KVTube.GetVideo(r.Context(), id, fallbackPtr, h.Catalog.ChannelIDs, related, series)
 	writeJSON(w, http.StatusOK, info)
 }
 
@@ -1098,7 +1105,7 @@ func (h *Handler) createTVPairLocked() *tvPairEntry {
 	ttlMS := int64(15 * 60 * 1000)
 	entry := &tvPairEntry{
 		Code:        code,
-		InstanceURL: h.KVTube.BaseURL,
+		InstanceURL: "",
 		CreatedAt:   now,
 		ExpiresAt:   now + ttlMS,
 		Linked:      false,
@@ -1123,7 +1130,7 @@ func (h *Handler) HandleTVPair(w http.ResponseWriter, r *http.Request) {
 				"status":      "waiting",
 				"code":        entry.Code,
 				"expiresIn":   900,
-				"instanceUrl": h.KVTube.BaseURL,
+				"instanceUrl": "",
 			})
 			return
 		}
@@ -1202,7 +1209,7 @@ func (h *Handler) HandleTVPair(w http.ResponseWriter, r *http.Request) {
 			"code":        entry.Code,
 			"status":      "waiting",
 			"expiresIn":   900,
-			"instanceUrl": h.KVTube.BaseURL,
+			"instanceUrl": "",
 		})
 		return
 	}
@@ -1225,9 +1232,6 @@ func (h *Handler) HandleTVPair(w http.ResponseWriter, r *http.Request) {
 			h.tvPairs[code] = entry
 		}
 		inst := strings.TrimSpace(body.InstanceURL)
-		if inst == "" {
-			inst = h.KVTube.BaseURL
-		}
 		entry.InstanceURL = inst
 		entry.Token = strings.TrimSpace(body.Token)
 		entry.RoomCode = strings.ToUpper(strings.TrimSpace(body.RoomCode))
@@ -1307,10 +1311,7 @@ func (h *Handler) GetChannels(w http.ResponseWriter, r *http.Request) {
 	list := make([]chanStat, 0, len(counts))
 	for name, cnt := range counts {
 		cid := h.Catalog.ChannelIDs[name]
-		u := h.KVTube.BaseURL + "/search?q=" + name
-		if cid != "" {
-			u = h.KVTube.BaseURL + "/channel/" + cid
-		}
+		u := "/?channel=" + url.QueryEscape(name)
 		list = append(list, chanStat{Name: name, Count: cnt, ID: cid, URL: u})
 	}
 	sort.Slice(list, func(i, j int) bool {

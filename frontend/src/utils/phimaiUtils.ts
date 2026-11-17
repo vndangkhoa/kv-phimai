@@ -1,25 +1,23 @@
 import type { Film } from '../types/phimai';
 
-export const KVTUBE_ORIGIN = 'https://u.khoavo.vndns.net';
-
 export function getThumbUrl(id: string): string {
   return `/api/kvtube/thumb/${encodeURIComponent(id)}`;
 }
 
 export function getFallbackThumbUrl(id: string): string {
-  return `${KVTUBE_ORIGIN}/api/invidious/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+  return `/api/kvtube/thumb/${encodeURIComponent(id)}?q=mqdefault`;
 }
 
 export function getKVTubeWatchUrl(id: string): string {
-  return `${KVTUBE_ORIGIN}/watch?v=${encodeURIComponent(id)}`;
+  return `/watch?v=${encodeURIComponent(id)}`;
 }
 
 export function getKVTubeEmbedUrl(id: string): string {
-  return `${KVTUBE_ORIGIN}/embed/${encodeURIComponent(id)}`;
+  return `/watch?v=${encodeURIComponent(id)}`;
 }
 
 export function getKVTubeStreamUrl(id: string): string {
-  return `/api/kvtube/stream/${encodeURIComponent(id)}`;
+  return `/api/invidious/latest_version?id=${encodeURIComponent(id)}&itag=18&local=true`;
 }
 
 export const CAT_LABEL: Record<string, string> = {
