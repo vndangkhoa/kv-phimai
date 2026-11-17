@@ -394,7 +394,7 @@ export function MaterialiousPlayer({
                     maxAttempts: 1,
                     baseDelay: 250,
                     backoffFactor: 1.2,
-                    timeout: 3500,
+                    timeout: 2400,
                   },
                 },
               });
@@ -430,7 +430,7 @@ export function MaterialiousPlayer({
               await Promise.race([
                 player.load(manifestUrl, resumePos > 0 ? resumePos : undefined),
                 new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error('Shaka manifest/segment timeout (3.5s)')), 3500)
+                  setTimeout(() => reject(new Error('Shaka manifest/segment timeout (2.6s)')), 2600)
                 ),
               ]);
               if (cancelled) return;
@@ -692,8 +692,9 @@ export function MaterialiousPlayer({
     const onWaiting = () => {
       setIsBuffering(true);
       if (needsSeparateAudio && aud && !aud.paused) aud.pause();
+      if (!playbackStartedRef.current) return;
 
-      // Auto-step down quality if direct adaptive mode stalls twice within 18 seconds
+      // Auto-step down quality if direct playback stalls twice after playback started
       if (usingProgressiveRef.current && qualityMode === 'auto' && qualities.length > 1) {
         const now = Date.now();
         stallTimestampsRef.current = stallTimestampsRef.current.filter((t) => now - t < 18_000);
@@ -701,7 +702,9 @@ export function MaterialiousPlayer({
         if (stallTimestampsRef.current.length >= 2) {
           stallTimestampsRef.current = [];
           bandwidthMonitor.reportStall();
-          const lower = qualities.find((q) => q.height < activeHeight);
+          const lower =
+            qualities.find((q) => q.height < activeHeight && q.hasAudio) ||
+            qualities.find((q) => q.height < activeHeight && q.height >= 360);
           if (lower) {
             attachDirectQuality(lower, vid.currentTime);
           }

@@ -695,11 +695,16 @@ func (s *Service) ProxyInvidious(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(h, val)
 		}
 	}
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS, HEAD")
 	w.Header().Set("Access-Control-Allow-Headers", "*")
 
-	w.WriteHeader(upstreamResp.StatusCode)
+	statusCode := upstreamResp.StatusCode
+	if statusCode == http.StatusOK && r.Header.Get("Range") != "" && upstreamResp.Header.Get("Content-Range") != "" {
+		statusCode = http.StatusPartialContent
+	}
+	w.WriteHeader(statusCode)
 	if r.Method != http.MethodHead {
 		_, _ = io.Copy(w, upstreamResp.Body)
 	}
@@ -1201,9 +1206,14 @@ func (s *Service) ProxyStream(w http.ResponseWriter, r *http.Request, videoID st
 	if w.Header().Get("Accept-Ranges") == "" {
 		w.Header().Set("Accept-Ranges", "bytes")
 	}
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	w.WriteHeader(resp.StatusCode)
+	statusCode := resp.StatusCode
+	if statusCode == http.StatusOK && r.Header.Get("Range") != "" && resp.Header.Get("Content-Range") != "" {
+		statusCode = http.StatusPartialContent
+	}
+	w.WriteHeader(statusCode)
 	if r.Method != http.MethodHead {
 		_, _ = io.Copy(w, resp.Body)
 	}
