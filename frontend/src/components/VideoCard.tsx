@@ -62,23 +62,47 @@ export const VideoCard = memo(function VideoCard({
             className="yt-card-thumb-img"
           />
 
-          {/* Top-left Tool Badge */}
+          {/* Top-left Tool & Fresh Release Badge */}
           <div
             style={{
               position: 'absolute',
               top: '8px',
               left: '8px',
-              background: 'rgba(15, 15, 15, 0.82)',
-              color: '#f1f1f1',
-              fontSize: '10.5px',
-              fontWeight: 700,
-              padding: '2px 7px',
-              borderRadius: '6px',
-              letterSpacing: '0.2px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
               zIndex: 3,
             }}
           >
-            {firstTool}
+            {(film.tags?.includes('moi-nhat') || film.rank > 9258) && (
+              <div
+                style={{
+                  background: '#ff0033',
+                  color: '#ffffff',
+                  fontSize: '10px',
+                  fontWeight: 800,
+                  padding: '2px 6px',
+                  borderRadius: '6px',
+                  letterSpacing: '0.3px',
+                  boxShadow: '0 2px 6px rgba(0,0,0,0.45)',
+                }}
+              >
+                MỚI
+              </div>
+            )}
+            <div
+              style={{
+                background: 'rgba(15, 15, 15, 0.82)',
+                color: '#f1f1f1',
+                fontSize: '10.5px',
+                fontWeight: 700,
+                padding: '2px 7px',
+                borderRadius: '6px',
+                letterSpacing: '0.2px',
+              }}
+            >
+              {firstTool}
+            </div>
           </div>
 
           {/* Hover Save / Bookmark Quick Button */}

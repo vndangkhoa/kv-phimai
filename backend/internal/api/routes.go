@@ -6,6 +6,9 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 	// Health & Manifest
 	r.Get("/health", h.GetHealth)
 	r.Get("/manifest", h.GetManifest)
+	r.Get("/crawler/status", h.GetCrawlerStatus)
+	r.Post("/crawler/sync", h.PostCrawlerSync)
+	r.Get("/crawler/sync", h.PostCrawlerSync)
 
 	// Films Catalog, Search & Detail
 	r.Get("/films", h.GetFilms)

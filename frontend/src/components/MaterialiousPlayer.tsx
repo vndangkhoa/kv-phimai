@@ -18,7 +18,7 @@ import {
   IoCloseOutline,
   IoTimerOutline,
 } from 'react-icons/io5';
-import { MdPictureInPictureAlt } from 'react-icons/md';
+import { MdPictureInPictureAlt, MdReplay10, MdForward10, MdFitScreen } from 'react-icons/md';
 import {
   useMediaSession,
   setMediaSessionPlaybackState,
@@ -97,6 +97,16 @@ export function MaterialiousPlayer({
   const stallTimestampsRef = useRef<number[]>([]);
   const lastLoadedVideoIdRef = useRef<string>('');
   const startupWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seekRippleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const lastPreviewSeekRef = useRef<number>(0);
+  const pendingPreviewTimeRef = useRef<number | null>(null);
+  const lastScrubTimeRef = useRef<number | null>(null);
+  const lastTouchTimeRef = useRef<number>(0);
+  const isMouseDraggingRef = useRef<boolean>(false);
+  const wasNativeFsRef = useRef<boolean>(false);
 
   const clearStartupWatchdog = useCallback(() => {
     if (startupWatchdogRef.current) {
@@ -115,6 +125,12 @@ export function MaterialiousPlayer({
   const [isBuffering, setIsBuffering] = useState(true);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isCssFullscreen, setIsCssFullscreen] = useState(false);
+  const [verticalFillMode, setVerticalFillMode] = useState<'contain' | 'cover'>('contain');
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [scrubTime, setScrubTime] = useState<number | null>(null);
+  const [scrubPercent, setScrubPercent] = useState<number>(0);
+  const [previewHasFrame, setPreviewHasFrame] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [isLooping, setIsLooping] = useState(false);
 
@@ -299,6 +315,11 @@ export function MaterialiousPlayer({
     setIsBuffering(true);
     setQualityMode('auto');
     setSelectedHeight(0);
+    setPreviewHasFrame(false);
+    setScrubTime(null);
+    setIsScrubbing(false);
+    pendingPreviewTimeRef.current = null;
+    lastScrubTimeRef.current = null;
     setCurrentTime(getSavedPosition(videoId));
 
     async function initStream(attempt = 1) {
@@ -318,6 +339,9 @@ export function MaterialiousPlayer({
           return;
         }
         videoDataRef.current = videoData;
+        if (videoData.lengthSeconds && videoData.lengthSeconds > 0) {
+          setDuration(videoData.lengthSeconds);
+        }
 
         if (Array.isArray(videoData.captions)) {
           setCaptions(
@@ -972,15 +996,176 @@ export function MaterialiousPlayer({
     }
   }, [isMuted, volume, needsSeparateAudio]);
 
+  const activeFullscreen = isFullscreen || isCssFullscreen;
+
+  useEffect(() => {
+    const onFsChange = () => {
+      const fsEl = document.fullscreenElement || (document as any).webkitFullscreenElement;
+      const nextNative = Boolean(fsEl);
+      setIsFullscreen(nextNative);
+      if (nextNative) {
+        wasNativeFsRef.current = true;
+      } else if (wasNativeFsRef.current) {
+        wasNativeFsRef.current = false;
+        setIsCssFullscreen(false);
+        setVerticalFillMode('contain');
+        window.dispatchEvent(new CustomEvent('phimai-player-fullscreen', { detail: { isFullscreen: false } }));
+      }
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('webkitfullscreenchange', onFsChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (compact && isCssFullscreen) {
+      setIsCssFullscreen(false);
+      setVerticalFillMode('contain');
+      window.dispatchEvent(new CustomEvent('phimai-player-fullscreen', { detail: { isFullscreen: false } }));
+    }
+  }, [compact, isCssFullscreen]);
+
   const toggleFullscreen = useCallback(() => {
     const c = containerRef.current;
     if (!c) return;
-    if (!document.fullscreenElement) {
-      c.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {});
+    const currentlyFs = Boolean(
+      document.fullscreenElement || (document as any).webkitFullscreenElement || isCssFullscreen
+    );
+    if (currentlyFs) {
+      setIsCssFullscreen(false);
+      setIsFullscreen(false);
+      setVerticalFillMode('contain');
+      wasNativeFsRef.current = false;
+      window.dispatchEvent(new CustomEvent('phimai-player-fullscreen', { detail: { isFullscreen: false } }));
+      if (document.fullscreenElement || (document as any).webkitFullscreenElement) {
+        document.exitFullscreen?.().catch(() => {});
+      }
     } else {
-      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {});
+      // Activate CSS full-viewport vertical phone mode immediately; also attempt native fullscreen without locking orientation
+      setIsCssFullscreen(true);
+      window.dispatchEvent(new CustomEvent('phimai-player-fullscreen', { detail: { isFullscreen: true } }));
+      if (c.requestFullscreen) {
+        c.requestFullscreen()
+          .then(() => {
+            wasNativeFsRef.current = true;
+            setIsFullscreen(true);
+          })
+          .catch(() => {
+            // CSS full-viewport mode remains active
+          });
+      }
+    }
+    resetControlsTimer(3000);
+  }, [isCssFullscreen, resetControlsTimer]);
+
+  const showSeekFeedback = useCallback((side: 'left' | 'right', text: string) => {
+    setSeekRipple({ side, text });
+    if (seekRippleTimerRef.current) clearTimeout(seekRippleTimerRef.current);
+    seekRippleTimerRef.current = setTimeout(() => setSeekRipple(null), 650);
+  }, []);
+
+  const triggerSeekBackward = useCallback(
+    (e?: React.MouseEvent | React.TouchEvent) => {
+      e?.stopPropagation();
+      const cur = videoRef.current?.currentTime ?? currentTime;
+      handleSeek(Math.max(0, cur - 10));
+      showSeekFeedback('left', '-10s');
+    },
+    [currentTime, handleSeek, showSeekFeedback]
+  );
+
+  const triggerSeekForward = useCallback(
+    (e?: React.MouseEvent | React.TouchEvent) => {
+      e?.stopPropagation();
+      const cur = videoRef.current?.currentTime ?? currentTime;
+      const dur = duration || videoRef.current?.duration || 0;
+      handleSeek(dur > 0 ? Math.min(dur, cur + 10) : cur + 10);
+      showSeekFeedback('right', '+10s');
+    },
+    [currentTime, duration, handleSeek, showSeekFeedback]
+  );
+
+  const drawPreviewFrame = useCallback(() => {
+    const pv = previewVideoRef.current;
+    const canvas = previewCanvasRef.current;
+    if (!pv || !canvas || pv.videoWidth === 0 || pv.videoHeight === 0) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    try {
+      ctx.drawImage(pv, 0, 0, canvas.width, canvas.height);
+      setPreviewHasFrame(true);
+    } catch {
+      // ignore cross-origin or decode error
     }
   }, []);
+
+  const requestPreviewSeek = useCallback((targetSec: number) => {
+    const pv = previewVideoRef.current;
+    if (!pv || !Number.isFinite(targetSec) || targetSec < 0) return;
+    const now = Date.now();
+    if (pv.readyState < 1) {
+      pendingPreviewTimeRef.current = targetSec;
+      return;
+    }
+    if (pv.seeking || now - lastPreviewSeekRef.current < 90) {
+      pendingPreviewTimeRef.current = targetSec;
+      return;
+    }
+    lastPreviewSeekRef.current = now;
+    pendingPreviewTimeRef.current = null;
+    try {
+      pv.currentTime = targetSec;
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const updateScrubFromClientX = useCallback(
+    (clientX: number) => {
+      const el = timelineRef.current;
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0) return null;
+      const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const dur = duration || videoRef.current?.duration || previewVideoRef.current?.duration || videoDataRef.current?.lengthSeconds || 0;
+      const targetSec = dur > 0 ? pos * dur : 0;
+      lastScrubTimeRef.current = targetSec;
+      setScrubPercent(pos * 100);
+      setScrubTime(targetSec);
+      if (dur > 0) {
+        requestPreviewSeek(targetSec);
+      }
+      return targetSec;
+    },
+    [duration, requestPreviewSeek]
+  );
+
+  useEffect(() => {
+    if (!isScrubbing) return;
+    const onWinMouseMove = (e: MouseEvent) => {
+      if (!isMouseDraggingRef.current) return;
+      updateScrubFromClientX(e.clientX);
+    };
+    const onWinMouseUp = (e: MouseEvent) => {
+      if (!isMouseDraggingRef.current) return;
+      isMouseDraggingRef.current = false;
+      const finalTime = updateScrubFromClientX(e.clientX) ?? lastScrubTimeRef.current;
+      if (finalTime !== null && Number.isFinite(finalTime)) {
+        handleSeek(finalTime);
+      }
+      setIsScrubbing(false);
+      setScrubTime(null);
+    };
+    window.addEventListener('mousemove', onWinMouseMove);
+    window.addEventListener('mouseup', onWinMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onWinMouseMove);
+      window.removeEventListener('mouseup', onWinMouseUp);
+    };
+  }, [isScrubbing, updateScrubFromClientX, handleSeek]);
 
   const togglePiP = async () => {
     const v = videoRef.current;
@@ -1020,18 +1205,18 @@ export function MaterialiousPlayer({
         case 'j':
         case 'arrowleft':
           e.preventDefault();
-          handleSeek(vid.currentTime - (e.key === 'j' ? 10 : 5));
+          triggerSeekBackward();
           break;
         case 'l':
         case 'arrowright':
           e.preventDefault();
-          handleSeek(vid.currentTime + (e.key === 'l' ? 10 : 5));
+          triggerSeekForward();
           break;
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [compact, togglePlay, toggleFullscreen, toggleMute, handleSeek]);
+  }, [compact, togglePlay, toggleFullscreen, toggleMute, triggerSeekBackward, triggerSeekForward]);
 
   const handleContainerClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (compact) return;
@@ -1042,13 +1227,9 @@ export function MaterialiousPlayer({
 
     if (now - lastTapRef.current.time < 280) {
       if (clickX < w * 0.35) {
-        handleSeek(currentTime - 10);
-        setSeekRipple({ side: 'left', text: '-10s' });
-        setTimeout(() => setSeekRipple(null), 600);
+        triggerSeekBackward();
       } else if (clickX > w * 0.65) {
-        handleSeek(currentTime + 10);
-        setSeekRipple({ side: 'right', text: '+10s' });
-        setTimeout(() => setSeekRipple(null), 600);
+        triggerSeekForward();
       }
     } else {
       if (!showControls) {
@@ -1062,21 +1243,13 @@ export function MaterialiousPlayer({
   };
 
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+  const displayedProgressPercent = isScrubbing && scrubTime !== null && duration > 0 ? scrubPercent : progressPercent;
   const bufferedPercent = duration > 0 ? Math.min(100, (buffered / duration) * 100) : 0;
-  const resolutionBadge =
-    activeHeight >= 2160
-      ? '4K'
-      : activeHeight >= 1440
-        ? '2K'
-        : activeHeight >= 1080
-          ? 'FHD'
-          : activeHeight >= 720
-            ? 'HD'
-            : 'SD';
 
   return (
     <div
       ref={containerRef}
+      data-testid={compact ? undefined : 'player-container'}
       className={compact ? 'mp-compact-container' : undefined}
       onMouseMove={() => resetControlsTimer(2500)}
       onTouchStart={() => resetControlsTimer(3000)}
@@ -1099,9 +1272,9 @@ export function MaterialiousPlayer({
               width: '100%',
               height: '100%',
               backgroundColor: '#000000',
-              borderRadius: isFullscreen ? '0' : '14px',
+              borderRadius: activeFullscreen ? '0' : '14px',
               overflow: 'hidden',
-              cursor: showControls || !isPlaying || showSettings ? 'default' : 'none',
+              cursor: showControls || !isPlaying || showSettings || isScrubbing ? 'default' : 'none',
               userSelect: 'none',
             }
       }
@@ -1124,7 +1297,7 @@ export function MaterialiousPlayer({
             : {
                 width: '100%',
                 height: '100%',
-                objectFit: 'contain',
+                objectFit: activeFullscreen ? verticalFillMode : 'contain',
                 display: 'block',
               }
         }
@@ -1141,6 +1314,57 @@ export function MaterialiousPlayer({
       </video>
 
       <audio ref={audioRef} playsInline style={{ display: 'none' }} />
+
+      {!compact && videoId && (
+        <video
+          ref={previewVideoRef}
+          src={`/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`}
+          muted
+          playsInline
+          preload="metadata"
+          crossOrigin="anonymous"
+          style={{
+            position: 'absolute',
+            width: '1px',
+            height: '1px',
+            opacity: 0,
+            pointerEvents: 'none',
+            zIndex: -1,
+          }}
+          onLoadedMetadata={() => {
+            const pv = previewVideoRef.current;
+            if (pv && Number.isFinite(pv.duration) && pv.duration > 0 && duration <= 0) {
+              setDuration(pv.duration);
+            }
+            if (pendingPreviewTimeRef.current !== null && pv) {
+              const target = pendingPreviewTimeRef.current;
+              pendingPreviewTimeRef.current = null;
+              try {
+                lastPreviewSeekRef.current = Date.now();
+                pv.currentTime = target;
+              } catch {
+                // ignore
+              }
+            }
+          }}
+          onSeeked={() => {
+            drawPreviewFrame();
+            const pv = previewVideoRef.current;
+            if (pv && pendingPreviewTimeRef.current !== null) {
+              const nextTarget = pendingPreviewTimeRef.current;
+              pendingPreviewTimeRef.current = null;
+              if (Math.abs(nextTarget - pv.currentTime) > 0.25) {
+                lastPreviewSeekRef.current = Date.now();
+                try {
+                  pv.currentTime = nextTarget;
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }}
+        />
+      )}
 
       {/* Poster backdrop until first decoded frame */}
       {!compact && !dataLoaded && thumbnail && (
@@ -1159,7 +1383,7 @@ export function MaterialiousPlayer({
           <img
             src={thumbnail}
             alt={title || ''}
-            style={{ width: '100%', height: '100%', objectFit: 'contain', filter: 'brightness(0.65)' }}
+            style={{ width: '100%', height: '100%', objectFit: activeFullscreen ? verticalFillMode : 'contain', filter: 'brightness(0.65)' }}
           />
         </div>
       )}
@@ -1445,83 +1669,406 @@ export function MaterialiousPlayer({
             </div>
           )}
 
+          {/* Fullscreen Top Header & Vertical Phone Fit Toggle */}
+          {activeFullscreen && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                padding: 'calc(10px + env(safe-area-inset-top, 0px)) 14px 20px',
+                background: 'linear-gradient(to bottom, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.35) 65%, transparent 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+                opacity: showControls || !isPlaying || showSettings ? 1 : 0,
+                pointerEvents: showControls || !isPlaying || showSettings ? 'auto' : 'none',
+                transition: 'opacity 0.2s ease',
+                zIndex: 21,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  style={{
+                    background: 'rgba(255,255,255,0.14)',
+                    border: 'none',
+                    color: '#fff',
+                    width: '34px',
+                    height: '34px',
+                    borderRadius: '50%',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                  }}
+                  title="Thoát toàn màn hình"
+                >
+                  <IoArrowBack size={18} />
+                </button>
+                {title && (
+                  <span
+                    style={{
+                      color: '#fff',
+                      fontSize: '13.5px',
+                      fontWeight: 600,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {title}
+                  </span>
+                )}
+              </div>
+
+              <button
+                type="button"
+                data-testid="player-vertical-fill-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setVerticalFillMode((m) => (m === 'contain' ? 'cover' : 'contain'));
+                  resetControlsTimer(3000);
+                }}
+                style={{
+                  background: verticalFillMode === 'cover' ? 'rgba(255, 0, 51, 0.85)' : 'rgba(255,255,255,0.16)',
+                  border: '1px solid rgba(255,255,255,0.22)',
+                  color: '#fff',
+                  padding: '6px 10px',
+                  borderRadius: '18px',
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+                title="Chuyển chế độ vừa khung / tràn màn hình dọc"
+              >
+                <MdFitScreen size={16} />
+                <span>{verticalFillMode === 'cover' ? 'Vừa khung' : 'Toàn màn dọc'}</span>
+              </button>
+            </div>
+          )}
+
+          {/* Center Mobile / Touch Quick Controls (-10s / Play / +10s) */}
+          {!errorMsg && !isBuffering && (
+            <div
+              className="player-center-touch-controls"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '28px',
+                zIndex: 18,
+                pointerEvents: 'none',
+                opacity: (showControls || !isPlaying) && !showSettings && !isScrubbing ? 1 : 0,
+                transition: 'opacity 0.2s ease',
+              }}
+            >
+              <button
+                type="button"
+                data-testid="player-center-rewind-10s"
+                onClick={triggerSeekBackward}
+                style={{
+                  pointerEvents: (showControls || !isPlaying) && !showSettings && !isScrubbing ? 'auto' : 'none',
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '50%',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  backgroundColor: 'rgba(0,0,0,0.55)',
+                  backdropFilter: 'blur(4px)',
+                  color: '#fff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+                title="Tua lùi 10 giây"
+              >
+                <MdReplay10 size={24} />
+              </button>
+
+              <button
+                type="button"
+                data-testid="player-center-play"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePlay();
+                }}
+                style={{
+                  pointerEvents: (showControls || !isPlaying) && !showSettings && !isScrubbing ? 'auto' : 'none',
+                  width: '56px',
+                  height: '56px',
+                  borderRadius: '50%',
+                  border: '1px solid rgba(255,255,255,0.28)',
+                  backgroundColor: 'rgba(0,0,0,0.62)',
+                  backdropFilter: 'blur(6px)',
+                  color: '#fff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+                title={isPlaying ? 'Tạm dừng' : 'Phát'}
+              >
+                {isPlaying ? <IoPause size={28} /> : <IoPlay size={28} style={{ marginLeft: '2px' }} />}
+              </button>
+
+              <button
+                type="button"
+                data-testid="player-center-forward-10s"
+                onClick={triggerSeekForward}
+                style={{
+                  pointerEvents: (showControls || !isPlaying) && !showSettings && !isScrubbing ? 'auto' : 'none',
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '50%',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  backgroundColor: 'rgba(0,0,0,0.55)',
+                  backdropFilter: 'blur(4px)',
+                  color: '#fff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+                title="Tua nhanh 10 giây"
+              >
+                <MdForward10 size={24} />
+              </button>
+            </div>
+          )}
+
           {/* Bottom Materialious Floating Controls */}
           <div
+            className="player-controls-bar"
             onClick={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
               bottom: 0,
               left: 0,
               right: 0,
-              padding: '20px 16px 12px',
-              background: 'linear-gradient(to top, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.45) 60%, transparent 100%)',
+              padding: activeFullscreen ? '24px 16px calc(14px + env(safe-area-inset-bottom, 0px))' : '20px 16px 12px',
+              background: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.5) 60%, transparent 100%)',
               display: 'flex',
               flexDirection: 'column',
-              gap: '8px',
-              opacity: showControls || !isPlaying || showSettings ? 1 : 0,
-              pointerEvents: showControls || !isPlaying || showSettings ? 'auto' : 'none',
+              gap: '6px',
+              opacity: showControls || !isPlaying || showSettings || isScrubbing ? 1 : 0,
+              pointerEvents: showControls || !isPlaying || showSettings || isScrubbing ? 'auto' : 'none',
               transition: 'opacity 0.2s ease',
               zIndex: 20,
             }}
           >
-            {/* Timeline Scrubber */}
+            {/* Timeline Scrubber with Hold/Slide Thumbnail Preview */}
             <div
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                handleSeek(pos * (duration || videoRef.current?.duration || 0));
+              ref={timelineRef}
+              data-testid="player-timeline"
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                if (Date.now() - lastTouchTimeRef.current < 500) return;
+                isMouseDraggingRef.current = true;
+                setIsScrubbing(true);
+                updateScrubFromClientX(e.clientX);
+                resetControlsTimer(4000);
+              }}
+              onMouseMove={(e) => {
+                e.stopPropagation();
+                if (Date.now() - lastTouchTimeRef.current < 500) return;
+                if (!isMouseDraggingRef.current) {
+                  updateScrubFromClientX(e.clientX);
+                }
+              }}
+              onMouseLeave={() => {
+                if (!isMouseDraggingRef.current && !isScrubbing) {
+                  setScrubTime(null);
+                }
+              }}
+              onTouchStart={(e) => {
+                e.stopPropagation();
+                lastTouchTimeRef.current = Date.now();
+                if (e.touches.length > 0) {
+                  setIsScrubbing(true);
+                  updateScrubFromClientX(e.touches[0].clientX);
+                  resetControlsTimer(5000);
+                }
+              }}
+              onTouchMove={(e) => {
+                e.stopPropagation();
+                lastTouchTimeRef.current = Date.now();
+                if (e.touches.length > 0) {
+                  updateScrubFromClientX(e.touches[0].clientX);
+                  resetControlsTimer(5000);
+                }
+              }}
+              onTouchEnd={(e) => {
+                e.stopPropagation();
+                lastTouchTimeRef.current = Date.now();
+                const finalTime = lastScrubTimeRef.current;
+                if (finalTime !== null && Number.isFinite(finalTime)) {
+                  handleSeek(finalTime);
+                }
+                setIsScrubbing(false);
+                setScrubTime(null);
+              }}
+              onTouchCancel={(e) => {
+                e.stopPropagation();
+                lastTouchTimeRef.current = Date.now();
+                setIsScrubbing(false);
+                setScrubTime(null);
               }}
               style={{
                 position: 'relative',
-                height: '5px',
-                borderRadius: '3px',
-                backgroundColor: 'rgba(255,255,255,0.28)',
+                height: '24px',
+                display: 'flex',
+                alignItems: 'center',
                 cursor: 'pointer',
+                touchAction: 'none',
+                marginBottom: '-4px',
               }}
             >
+              {/* Floating Preview Thumbnail Card while hovering, holding, or sliding */}
+              {scrubTime !== null && (
+                <div
+                  data-testid="timeline-preview-card"
+                  style={{
+                    position: 'absolute',
+                    bottom: '30px',
+                    left: `clamp(84px, ${scrubPercent}%, calc(100% - 84px))`,
+                    transform: 'translateX(-50%)',
+                    width: '160px',
+                    pointerEvents: 'none',
+                    zIndex: 35,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  <div
+                    style={{
+                      position: 'relative',
+                      width: '160px',
+                      height: '90px',
+                      borderRadius: '8px',
+                      overflow: 'hidden',
+                      border: '2px solid rgba(255,255,255,0.85)',
+                      backgroundColor: '#0f0f0f',
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.8)',
+                    }}
+                  >
+                    {thumbnail && (
+                      <img
+                        src={thumbnail}
+                        alt=""
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                        }}
+                      />
+                    )}
+                    <canvas
+                      ref={previewCanvasRef}
+                      width={160}
+                      height={90}
+                      style={{
+                        position: 'relative',
+                        width: '100%',
+                        height: '100%',
+                        display: 'block',
+                        objectFit: 'cover',
+                        opacity: previewHasFrame ? 1 : 0,
+                        transition: 'opacity 0.12s ease',
+                      }}
+                    />
+                  </div>
+                  <div
+                    data-testid="timeline-preview-time"
+                    style={{
+                      backgroundColor: 'rgba(15, 15, 15, 0.92)',
+                      color: '#fff',
+                      fontSize: '11.5px',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(255,255,255,0.18)',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.6)',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {formatTime(scrubTime)}
+                  </div>
+                </div>
+              )}
+
+              {/* Visual Track */}
               <div
                 style={{
-                  position: 'absolute',
-                  top: 0,
-                  bottom: 0,
-                  left: 0,
-                  width: `${bufferedPercent}%`,
-                  backgroundColor: 'rgba(255,255,255,0.48)',
-                  borderRadius: '3px',
-                }}
-              />
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  bottom: 0,
-                  left: 0,
-                  width: `${progressPercent}%`,
-                  backgroundColor: '#ff0033',
-                  borderRadius: '3px',
+                  position: 'relative',
+                  width: '100%',
+                  height: isScrubbing ? '7px' : '4.5px',
+                  borderRadius: '4px',
+                  backgroundColor: 'rgba(255,255,255,0.28)',
+                  transition: 'height 0.12s ease',
                 }}
               >
                 <div
                   style={{
                     position: 'absolute',
-                    right: '-6px',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    width: '12px',
-                    height: '12px',
-                    borderRadius: '50%',
-                    backgroundColor: '#ff0033',
+                    top: 0,
+                    bottom: 0,
+                    left: 0,
+                    width: `${bufferedPercent}%`,
+                    backgroundColor: 'rgba(255,255,255,0.48)',
+                    borderRadius: '4px',
                   }}
                 />
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    bottom: 0,
+                    left: 0,
+                    width: `${displayedProgressPercent}%`,
+                    backgroundColor: '#ff0033',
+                    borderRadius: '4px',
+                  }}
+                >
+                  <div
+                    style={{
+                      position: 'absolute',
+                      right: isScrubbing ? '-8px' : '-6px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      width: isScrubbing ? '16px' : '12px',
+                      height: isScrubbing ? '16px' : '12px',
+                      borderRadius: '50%',
+                      backgroundColor: '#ff0033',
+                      boxShadow: isScrubbing ? '0 0 0 4px rgba(255, 0, 51, 0.32)' : 'none',
+                      transition: 'width 0.12s ease, height 0.12s ease',
+                    }}
+                  />
+                </div>
               </div>
             </div>
 
             {/* Bottom Button Bar */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '2px', minWidth: 0 }}>
                 {onPrev && (
                   <button
                     type="button"
+                    className="player-prev-btn"
                     onClick={onPrev}
                     style={{ background: 'none', border: 'none', color: '#fff', padding: '6px', cursor: 'pointer', display: 'flex' }}
                     title="Tập trước"
@@ -1531,15 +2078,35 @@ export function MaterialiousPlayer({
                 )}
                 <button
                   type="button"
+                  data-testid="player-rewind-10s"
+                  onClick={triggerSeekBackward}
+                  style={{ background: 'none', border: 'none', color: '#fff', padding: '5px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                  title="Tua lùi 10 giây (j)"
+                >
+                  <MdReplay10 size={22} />
+                </button>
+                <button
+                  type="button"
+                  data-testid="player-play-btn"
                   onClick={togglePlay}
-                  style={{ background: 'none', border: 'none', color: '#fff', padding: '6px', cursor: 'pointer', display: 'flex' }}
+                  style={{ background: 'none', border: 'none', color: '#fff', padding: '5px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                   title={isPlaying ? 'Tạm dừng (k)' : 'Phát (k)'}
                 >
                   {isPlaying ? <IoPause size={22} /> : <IoPlay size={22} />}
                 </button>
+                <button
+                  type="button"
+                  data-testid="player-forward-10s"
+                  onClick={triggerSeekForward}
+                  style={{ background: 'none', border: 'none', color: '#fff', padding: '5px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                  title="Tua nhanh 10 giây (l)"
+                >
+                  <MdForward10 size={22} />
+                </button>
                 {onNext && (
                   <button
                     type="button"
+                    className="player-next-btn"
                     onClick={onNext}
                     style={{ background: 'none', border: 'none', color: '#fff', padding: '6px', cursor: 'pointer', display: 'flex' }}
                     title="Phim / tập tiếp theo"
@@ -1551,7 +2118,7 @@ export function MaterialiousPlayer({
                 <button
                   type="button"
                   onClick={toggleMute}
-                  style={{ background: 'none', border: 'none', color: '#fff', padding: '6px', cursor: 'pointer', display: 'flex' }}
+                  style={{ background: 'none', border: 'none', color: '#fff', padding: '5px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
                   title="Tắt tiếng (m)"
                 >
                   {isMuted || volume === 0 ? (
@@ -1575,43 +2142,17 @@ export function MaterialiousPlayer({
                   style={{ width: '64px', height: '4px', cursor: 'pointer', accentColor: '#fff' }}
                 />
 
-                <div className="player-time-display" style={{ fontSize: '12.5px', color: '#fff', fontWeight: 500, marginLeft: '6px', whiteSpace: 'nowrap' }}>
-                  <span>{formatTime(currentTime)}</span>
+                <div className="player-time-display" style={{ fontSize: '12px', color: '#fff', fontWeight: 500, marginLeft: '4px', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                  <span>{formatTime(isScrubbing && scrubTime !== null ? scrubTime : currentTime)}</span>
                   <span style={{ margin: '0 3px', opacity: 0.65 }}>/</span>
                   <span style={{ opacity: 0.75 }}>{formatTime(duration)}</span>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
                 <button
                   type="button"
-                  onClick={() => {
-                    setSettingsTab('quality');
-                    setShowSettings(true);
-                  }}
-                  style={{
-                    background: 'rgba(255,255,255,0.16)',
-                    border: 'none',
-                    borderRadius: '6px',
-                    color: '#fff',
-                    padding: '3px 7px',
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                  }}
-                  title={`Chất lượng đang phát: ${activeHeight}p (~${estimatedMbps} Mbps)`}
-                >
-                  <span>{qualityMode === 'auto' ? `Auto · ${activeHeight}p` : `${activeHeight}p`}</span>
-                  <span style={{ backgroundColor: '#ff0033', padding: '1px 4px', borderRadius: '3px', fontSize: '9px' }}>
-                    {resolutionBadge}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
+                  className="player-loop-btn"
                   onClick={() => setIsLooping(!isLooping)}
                   style={{
                     background: isLooping ? 'rgba(255,255,255,0.2)' : 'none',
@@ -1629,6 +2170,7 @@ export function MaterialiousPlayer({
 
                 <button
                   type="button"
+                  data-testid="player-settings-btn"
                   onClick={() => {
                     setSettingsTab('main');
                     setShowSettings(!showSettings);
@@ -1640,7 +2182,9 @@ export function MaterialiousPlayer({
                     padding: '6px',
                     borderRadius: '50%',
                     cursor: 'pointer',
-                    display: 'flex',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
                   }}
                   title="Cài đặt (Chất lượng, Tốc độ, Hẹn giờ)"
                 >
@@ -1659,11 +2203,22 @@ export function MaterialiousPlayer({
 
                 <button
                   type="button"
+                  className="player-fullscreen-btn"
+                  data-testid="player-fullscreen-btn"
                   onClick={toggleFullscreen}
-                  style={{ background: 'none', border: 'none', color: '#fff', padding: '6px', cursor: 'pointer', display: 'flex' }}
-                  title="Toàn màn hình (f)"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#fff',
+                    padding: '6px',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  title={activeFullscreen ? 'Thoát toàn màn hình (f)' : 'Toàn màn hình (f)'}
                 >
-                  {isFullscreen ? <IoContract size={19} /> : <IoExpand size={19} />}
+                  {activeFullscreen ? <IoContract size={19} /> : <IoExpand size={19} />}
                 </button>
               </div>
             </div>

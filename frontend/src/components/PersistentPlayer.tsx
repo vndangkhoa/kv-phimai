@@ -44,9 +44,36 @@ export function PersistentPlayer({
     width: number;
     height: number;
   } | null>(null);
+  const [isCssFullscreen, setIsCssFullscreen] = useState(false);
 
   const showFull = isWatchPage && Boolean(activeFilm);
   const showMini = !isWatchPage && Boolean(activeFilm);
+
+  useEffect(() => {
+    const onFullscreenEvent = (e: Event) => {
+      const detail = (e as CustomEvent<{ isFullscreen?: boolean }>).detail;
+      setIsCssFullscreen(Boolean(detail?.isFullscreen));
+    };
+    window.addEventListener('phimai-player-fullscreen', onFullscreenEvent);
+    return () => {
+      window.removeEventListener('phimai-player-fullscreen', onFullscreenEvent);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showFull && isCssFullscreen) {
+      setIsCssFullscreen(false);
+    }
+  }, [showFull, isCssFullscreen]);
+
+  useEffect(() => {
+    if (!(showFull && isCssFullscreen)) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [showFull, isCssFullscreen]);
 
   const updateSlotRect = useCallback(() => {
     if (!showFull) {
@@ -126,6 +153,24 @@ export function PersistentPlayer({
   if (!activeFilm) return null;
 
   const getHostStyle = (): React.CSSProperties => {
+    if (showFull && isCssFullscreen) {
+      return {
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100dvh',
+        zIndex: 99999,
+        pointerEvents: 'auto',
+        visibility: 'visible',
+        opacity: 1,
+        borderRadius: 0,
+        backgroundColor: '#000000',
+        overflow: 'hidden',
+      };
+    }
     if (showFull && slotRect && slotRect.width > 0) {
       return {
         position: 'absolute',

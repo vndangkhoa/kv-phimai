@@ -210,29 +210,63 @@ export function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Merge catalog helper
+  // Merge catalog helper (avoids unnecessary re-renders if no new/updated films arrived)
   const mergeFilmsIntoCatalog = useCallback((incoming: Film[]) => {
     if (!Array.isArray(incoming) || incoming.length === 0) return;
     setAllFilms((prev) => {
       const byId = new Map<string, Film>();
       for (const f of prev) if (f?.id) byId.set(f.id, f);
+      let changed = false;
       for (const f of incoming) {
         if (!f?.id) continue;
         const ex = byId.get(f.id);
-        byId.set(
-          f.id,
-          ex
-            ? { ...ex, ...f, blurbLong: f.blurbLong || ex.blurbLong, tags: f.tags?.length ? f.tags : ex.tags || [] }
-            : { ...f, tags: Array.isArray(f.tags) ? f.tags : [] }
-        );
+        if (!ex) {
+          changed = true;
+          byId.set(f.id, { ...f, tags: Array.isArray(f.tags) ? f.tags : [] });
+        } else if (
+          ex.rank !== f.rank ||
+          ex.title !== f.title ||
+          (f.blurbLong && f.blurbLong !== ex.blurbLong)
+        ) {
+          changed = true;
+          byId.set(f.id, {
+            ...ex,
+            ...f,
+            blurbLong: f.blurbLong || ex.blurbLong,
+            tags: f.tags?.length ? f.tags : ex.tags || [],
+          });
+        }
+      }
+      if (!changed && prev.length > FALLBACK_SEED_FILMS.length) {
+        return prev;
       }
       return Array.from(byId.values()).sort((a, b) => b.rank - a.rank);
     });
   }, []);
 
-  // Fast staged boot
+  // Refresh latest released / auto-crawled films & manifest counts
+  const syncLatestCatalog = useCallback(async () => {
+    try {
+      const [mfRes, latestRes] = await Promise.allSettled([
+        fetch('/api/manifest', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)),
+        fetch('/api/films?limit=60&page=1&sort=new', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)),
+      ]);
+      if (mfRes.status === 'fulfilled' && mfRes.value?.cats) {
+        setManifestCategories(mfRes.value.cats);
+      }
+      if (latestRes.status === 'fulfilled' && Array.isArray(latestRes.value?.items)) {
+        mergeFilmsIntoCatalog(latestRes.value.items as Film[]);
+      }
+    } catch {
+      // ignore transient poll failures
+    }
+  }, [mergeFilmsIntoCatalog]);
+
+  // Fast staged boot + periodic background auto-refresh for latest crawled releases
   useEffect(() => {
     let cancelled = false;
+    let lastSyncAt = Date.now();
+
     async function boot() {
       try {
         const [mfRes, initialRes] = await Promise.allSettled([
@@ -278,10 +312,28 @@ export function App() {
     }
 
     void boot();
+
+    const timer = window.setInterval(() => {
+      if (cancelled || document.visibilityState === 'hidden') return;
+      lastSyncAt = Date.now();
+      void syncLatestCatalog();
+    }, 45_000);
+
+    const onVisibility = () => {
+      if (cancelled || document.visibilityState !== 'visible') return;
+      if (Date.now() - lastSyncAt >= 15_000) {
+        lastSyncAt = Date.now();
+        void syncLatestCatalog();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [mergeFilmsIntoCatalog]);
+  }, [mergeFilmsIntoCatalog, syncLatestCatalog]);
 
   // Sync activeFilm for direct `/watch?v=...` entry
   useEffect(() => {
@@ -461,6 +513,7 @@ export function App() {
     { id: 'all', label: 'Tất cả', active: filters.cat === 'all' && filters.genre === 'all' && filters.sort !== 'hot' && !filters.fullOnly && !filters.channel },
     { id: 'hot', label: 'Đang thịnh hành', active: filters.sort === 'hot' },
     { id: 'full', label: 'Trọn bộ FULL', active: filters.fullOnly },
+    { id: 'cat:ngan', label: 'Phim ngắn & Short Drama', active: filters.cat === 'ngan' },
     { id: 'cat:trung', label: CAT_LABEL.trung, active: filters.cat === 'trung' },
     { id: 'cat:hoathinh', label: CAT_LABEL.hoathinh, active: filters.cat === 'hoathinh' },
     { id: 'cat:fantasy', label: CAT_LABEL.fantasy, active: filters.cat === 'fantasy' },

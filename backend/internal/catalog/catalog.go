@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"phimai-backend/internal/models"
@@ -35,7 +36,18 @@ type Catalog struct {
 	Playlists    []map[string]interface{}
 	SeriesByFilm map[string][]models.Film
 	ScreeningRaw map[string]interface{}
-	TopWeekMeta  struct {
+
+	// Auto-crawler state (protected by mu)
+	CrawledIDs      map[string]bool
+	CrawlRunning    bool
+	LastCrawlAt     time.Time
+	TotalCrawled    int
+	LastCrawlAdded  int
+	LastCrawlError  string
+	CrawlCycleCount int
+	BaseMaxRank     int
+	RecentCrawled   []models.Film
+	TopWeekMeta     struct {
 		Week   string `json:"week"`
 		Plays  int    `json:"plays"`
 		Filled bool   `json:"filled"`
@@ -85,6 +97,7 @@ func NewCatalog(dataDir string, kvtubeURL string) *Catalog {
 		ByRank:       make(map[int]*models.Film),
 		DeadIDs:      make(map[string]bool),
 		ChannelIDs:   make(map[string]string),
+		CrawledIDs:   make(map[string]bool),
 		SeriesByFilm: make(map[string][]models.Film),
 		ScreeningRaw: make(map[string]interface{}),
 	}
@@ -256,6 +269,17 @@ func (c *Catalog) loadAll() {
 	c.mergeFilmItemsFile(filmMap, filepath.Join(c.DataDir, "films-new.json"))
 	c.mergeFilmItemsFile(filmMap, filepath.Join(c.DataDir, "films-hot.json"))
 
+	maxStaticRank := 0
+	for _, f := range filmMap {
+		if f.Rank > maxStaticRank {
+			maxStaticRank = f.Rank
+		}
+	}
+	c.BaseMaxRank = maxStaticRank
+
+	// 4b. Load persisted auto-crawled AI videos & short dramas
+	c.loadCrawledFilmsFile(filmMap, filepath.Join(c.DataDir, "crawled-films.json"))
+
 	// Build sorted slice (by Rank DESC for newest first)
 	c.Films = make([]models.Film, 0, len(filmMap))
 	for _, f := range filmMap {
@@ -271,6 +295,7 @@ func (c *Catalog) loadAll() {
 		c.ByID[f.ID] = f
 		c.ByRank[f.Rank] = f
 	}
+	c.rebuildManifestCountsLocked()
 
 	// 5. Build series grouping map
 	c.buildSeriesGroups()
@@ -1132,6 +1157,7 @@ func (c *Catalog) MarkDead(id string) {
 		return
 	}
 	c.DeadIDs[id] = true
+	c.rebuildManifestCountsLocked()
 
 	runtimePath := filepath.Join(c.DataDir, "dead-runtime.json")
 	var list []string

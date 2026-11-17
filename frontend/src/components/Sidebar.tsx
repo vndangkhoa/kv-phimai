@@ -218,7 +218,7 @@ export function Sidebar({
           <span>Danh mục Phim AI</span>
         </div>
         {CAT_ORDER.map((catId) => {
-          const count = catId === 'all' ? Object.values(categories).reduce((a, b) => a + b, 0) : categories[catId] || 0;
+          const count = catId === 'all' ? (categories.all || allFilms.length || 0) : categories[catId] || 0;
           const isActive = filters.cat === catId && catId !== 'all';
           return (
             <button

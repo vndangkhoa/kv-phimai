@@ -31,6 +31,10 @@ func main() {
 	kvt.OnDeadVideo = cat.MarkDead
 	handler := api.NewHandler(db, cat, kvt)
 
+	crawlCtx, crawlCancel := context.WithCancel(context.Background())
+	defer crawlCancel()
+	go cat.StartAutoCrawler(crawlCtx, kvt, 30*time.Minute)
+
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)

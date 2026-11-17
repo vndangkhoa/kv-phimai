@@ -2283,7 +2283,7 @@ a {
   }
 
   .player-fullscreen-btn {
-    display: none !important;
+    display: inline-flex !important;
   }
 
   .player-prev-btn {
@@ -2309,6 +2309,14 @@ a {
   .player-time-display {
     font-size: 11px !important;
     margin-left: 2px !important;
+  }
+
+  .player-controls-bar {
+    padding: 18px 10px 10px !important;
+  }
+
+  .player-center-touch-controls {
+    display: flex !important;
   }
 }
 
@@ -4561,7 +4569,20 @@ a {
   margin-right: 8px;
 }
 
+.player-center-touch-controls {
+  display: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .player-center-touch-controls {
+    display: flex !important;
+  }
+}
+
 @media (max-width: 900px) {
+  .player-center-touch-controls {
+    display: flex !important;
+  }
   .player-settings-overlay {
     background: rgba(0, 0, 0, 0.75) !important;
     backdrop-filter: blur(12px) !important;
@@ -4583,6 +4604,9 @@ a {
   .player-volume-slider,
   .player-pip-btn {
     display: none !important;
+  }
+  .player-fullscreen-btn {
+    display: inline-flex !important;
   }
   .player-time-display {
     font-size: 11px !important;

@@ -83,31 +83,23 @@ func generateShortCode(length int) string {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) GetHealth(w http.ResponseWriter, r *http.Request) {
-	liveTotal := len(h.Catalog.Films) - len(h.Catalog.DeadIDs)
-	if v, ok := h.Catalog.Manifest["liveTotal"]; ok {
-		if fl, ok := v.(float64); ok && int(fl) > 0 {
-			liveTotal = int(fl)
-		}
-	}
+	totalFilms, liveTotal := h.Catalog.GetLiveCounts()
+	crawlSt := h.Catalog.GetCrawlerStatus()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":     "healthy",
-		"ok":         true,
-		"service":    "phimai",
-		"version":    "1.0.6",
-		"warpActive": h.KVTube.IsWarpActive(),
-		"warpProxy":  h.KVTube.WarpProxyURL,
-		"totalFilms": len(h.Catalog.Films),
-		"liveFilms":  liveTotal,
+		"status":       "healthy",
+		"ok":           true,
+		"service":      "phimai",
+		"version":      "1.0.7",
+		"warpActive":   h.KVTube.IsWarpActive(),
+		"warpProxy":    h.KVTube.WarpProxyURL,
+		"totalFilms":   totalFilms,
+		"liveFilms":    liveTotal,
+		"totalCrawled": crawlSt.TotalCrawled,
 	})
 }
 
 func (h *Handler) GetManifest(w http.ResponseWriter, r *http.Request) {
-	out := make(map[string]interface{}, len(h.Catalog.Manifest)+2)
-	for k, v := range h.Catalog.Manifest {
-		out[k] = v
-	}
-	out["playlists"] = h.Catalog.Playlists
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, h.Catalog.GetManifestSnapshot())
 }
 
 // ---------------------------------------------------------------------------
@@ -339,16 +331,19 @@ func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
 	plays := h.getSiteStat("plays", 4436)
 	online := h.countOnlineUsers()
 
-	totalFilms := len(h.Catalog.Films)
-	if v, ok := h.Catalog.Manifest["liveTotal"]; ok {
-		if fl, ok := v.(float64); ok && int(fl) > 0 {
-			totalFilms = int(fl)
-		}
-	}
+	_, totalFilms := h.Catalog.GetLiveCounts()
+	snap := h.Catalog.GetManifestSnapshot()
 	newWeek := 100
-	if v, ok := h.Catalog.Manifest["newLive"]; ok {
-		if fl, ok := v.(float64); ok && int(fl) > 0 {
-			newWeek = int(fl)
+	if v, ok := snap["newLive"]; ok {
+		switch n := v.(type) {
+		case int:
+			if n > 0 {
+				newWeek = n
+			}
+		case float64:
+			if int(n) > 0 {
+				newWeek = int(n)
+			}
 		}
 	}
 
@@ -1295,6 +1290,27 @@ func (h *Handler) GetDubReq(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) PostContact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+}
+
+func (h *Handler) GetCrawlerStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.Catalog.GetCrawlerStatus())
+}
+
+func (h *Handler) PostCrawlerSync(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	added, recent := h.Catalog.RunCrawlCycle(ctx, h.KVTube, 6)
+	st := h.Catalog.GetCrawlerStatus()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":           true,
+		"added":        added,
+		"newlyAdded":   recent,
+		"totalCrawled": st.TotalCrawled,
+		"liveFilms":    st.LiveFilms,
+		"lastCrawlAt":  st.LastCrawlAt,
+		"lastError":    st.LastError,
+		"recentFilms":  st.RecentFilms,
+	})
 }
 
 func (h *Handler) GetChannels(w http.ResponseWriter, r *http.Request) {
