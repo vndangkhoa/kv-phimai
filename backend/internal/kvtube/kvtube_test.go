@@ -322,3 +322,63 @@ func TestProxyInvidiousLatestVersionUsesCachedCompanionWithFailover(t *testing.T
 		t.Fatalf("expected cached format failover instead of hitting stalled /latest_version, hits=%d", upstreamLatestHits.Load())
 	}
 }
+
+func TestDoRacedRecoversFromStalledFirstAttempt(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		if n == 1 {
+			// Simulates a silently dead pooled connection: never answers.
+			select {
+			case <-time.After(5 * time.Second):
+			case <-r.Context().Done():
+			}
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("fast-ok"))
+	}))
+	defer srv.Close()
+
+	t.Setenv("WARP_PROXY", "off")
+	svc := NewService(srv.URL, srv.URL+"/api/invidious")
+	svc.raceDelay = 60 * time.Millisecond
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/x", nil)
+	start := time.Now()
+	resp, err := svc.doRequest(req, false, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	body := make([]byte, 16)
+	n, _ := resp.Body.Read(body)
+	resp.Body.Close()
+	if string(body[:n]) != "fast-ok" {
+		t.Fatalf("unexpected body %q", body[:n])
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("expected fast recovery via fresh connection, took %v", d)
+	}
+}
+
+func TestDoRacedReturnsPrimaryWhenFast(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	t.Setenv("WARP_PROXY", "off")
+	svc := NewService(srv.URL, srv.URL+"/api/invidious")
+	svc.raceDelay = 500 * time.Millisecond
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/x", nil)
+	resp, err := svc.doRequest(req, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	time.Sleep(700 * time.Millisecond)
+	if hits.Load() != 1 {
+		t.Fatalf("a fast primary must not trigger a duplicate request, hits=%d", hits.Load())
+	}
+}

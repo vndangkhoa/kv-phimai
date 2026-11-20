@@ -1,7 +1,8 @@
-import React, { memo, useState, useEffect } from 'react';
+import React, { memo, useState, useEffect, useRef } from 'react';
 import { Avatar } from '@astryxdesign/core/Avatar';
 import { Bookmark, BadgeCheck, Layers } from 'lucide-react';
 import type { Film } from '../types/phimai';
+import { schedulePrefetch } from '../services/streamService';
 import {
   getThumbUrl,
   formatViewsVN,
@@ -51,6 +52,14 @@ export const VideoCard = memo(function VideoCard({
     onOpenFilm(film);
   };
 
+  const prefetchCancelRef = useRef<() => void>(() => {});
+  const startPrefetch = (delayMs: number) => {
+    prefetchCancelRef.current();
+    prefetchCancelRef.current = schedulePrefetch(film.id, delayMs);
+  };
+  const cancelPrefetch = () => prefetchCancelRef.current();
+  useEffect(() => () => prefetchCancelRef.current(), []);
+
   const thumbUrl = imgErr ? DEFAULT_THUMB : getThumbUrl(film.id);
   const firstTool = (film.tool || 'AI').split('•')[0].trim();
 
@@ -69,7 +78,15 @@ export const VideoCard = memo(function VideoCard({
   };
 
   return (
-    <article className="yt-video-card-container">
+    <article
+      className="yt-video-card-container"
+      onPointerEnter={(e) => {
+        if (e.pointerType === 'mouse') startPrefetch(160);
+      }}
+      onPointerLeave={cancelPrefetch}
+      onTouchStart={() => startPrefetch(0)}
+      onFocus={() => startPrefetch(0)}
+    >
       <div className={`yt-card-stack${episodes ? ' is-stacked' : ''}`}>
         {episodes && (
           <>

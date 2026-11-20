@@ -32,6 +32,7 @@ import {
 } from '../utils/phimaiUtils';
 import {
   fetchVideoStream,
+  schedulePrefetch,
   isChannelSubscribed,
   toggleChannelSubscription,
   SUBSCRIPTIONS_EVENT,
@@ -217,6 +218,12 @@ export function WatchPage({
         : null,
     [seriesEpisodes, currentEpIdx]
   );
+
+  // Warm the next episode's stream metadata a few seconds after this one starts, so auto-play-next is instant.
+  useEffect(() => {
+    if (!nextSeriesEpisode?.id) return;
+    return schedulePrefetch(nextSeriesEpisode.id, 5000);
+  }, [nextSeriesEpisode?.id]);
 
   const handleDiscoverMoreEpisodes = async () => {
     if (discoveringEps) return;
@@ -921,6 +928,11 @@ export function WatchPage({
               <a
                 key={rel.id}
                 href={`/watch?v=${encodeURIComponent(rel.id)}`}
+                onPointerEnter={(e) => {
+                  if (e.pointerType === 'mouse') schedulePrefetch(rel.id, 160);
+                }}
+                onTouchStart={() => schedulePrefetch(rel.id, 0)}
+                onFocus={() => schedulePrefetch(rel.id, 0)}
                 onClick={(e) => {
                   e.preventDefault();
                   onSelectFilm(rel);

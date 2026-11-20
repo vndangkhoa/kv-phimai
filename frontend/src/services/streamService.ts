@@ -366,6 +366,20 @@ export function prefetchVideoStream(videoId: string): void {
   void fetchVideoStream(videoId);
 }
 
+/**
+ * Warm the (slow, cold) stream metadata request when the user shows intent to open a video.
+ * Returns a cancel function so a quick hover-through does not fire a request.
+ */
+export function schedulePrefetch(videoId: string, delayMs = 160): () => void {
+  if (!videoId) return () => {};
+  if (delayMs <= 0) {
+    prefetchVideoStream(videoId);
+    return () => {};
+  }
+  const timer = setTimeout(() => prefetchVideoStream(videoId), delayMs);
+  return () => clearTimeout(timer);
+}
+
 export function buildQualityList(data: VideoStreamPayload | null): QualityOption[] {
   if (!data) return [];
   const options: QualityOption[] = [];

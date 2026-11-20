@@ -220,10 +220,12 @@ function bufferedAhead(vid: HTMLVideoElement): number {
 }
 
 // Direct-stream auto upgrade: how often to check, and minimum gaps between probes / switches.
-const UPGRADE_CHECK_MS = 5_000;
+const UPGRADE_CHECK_MS = 3_000;
 const UPGRADE_PROBE_GAP_MS = 45_000;
-const UPGRADE_SWITCH_GAP_MS = 12_000;
+const UPGRADE_SWITCH_GAP_MS = 5_000;
 const UPGRADE_STALL_QUIET_MS = 45_000;
+// Start every video on the muxed progressive stream (single request) and upgrade quality in the background.
+const START_PROGRESSIVE_FIRST = true;
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
@@ -857,11 +859,15 @@ export function MaterialiousPlayer({
           bandwidthMonitor.getEstimatedMbps()
         );
 
-        // 1. Try Shaka Player DASH/HLS ABR first for true dynamic bandwidth switching up to 4K
+        // 1. Fast start: a muxed progressive stream needs ONE request to reach the first frame, whereas
+        // DASH needs manifest + init segments + media segments in series (each one a slow round trip through
+        // the video backend). Start with the muxed stream and let the auto-upgrade loop raise the resolution
+        // from measured bandwidth. Shaka DASH/HLS is only used when explicitly preferred.
         const dashManifest = videoData.dashUrl ? proxySameOriginUrl(videoData.dashUrl) : '';
         const hlsManifest = videoData.hlsUrl ? proxySameOriginUrl(videoData.hlsUrl) : '';
+        const hasMuxedStart = qualList.some((q) => q.hasAudio);
 
-        if (dashManifest || hlsManifest) {
+        if ((dashManifest || hlsManifest) && !(START_PROGRESSIVE_FIRST && hasMuxedStart)) {
           try {
             const shakaImport: any = await import('shaka-player');
             const shaka = shakaImport?.default || shakaImport;

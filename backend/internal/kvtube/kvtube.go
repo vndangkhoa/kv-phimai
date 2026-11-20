@@ -49,16 +49,19 @@ type inflightCall struct {
 }
 
 type Service struct {
-	BaseURL          string
-	UpstreamRoot     string
-	WarpProxyURL     string
-	warpHostPort     string
-	hedgeDelay       time.Duration
-	OnDeadVideo      func(videoID string)
-	apiClient        *http.Client
-	streamClient     *http.Client
-	warpAPIClient    *http.Client
-	warpStreamClient *http.Client
+	BaseURL           string
+	UpstreamRoot      string
+	WarpProxyURL      string
+	warpHostPort      string
+	hedgeDelay        time.Duration
+	raceDelay         time.Duration
+	OnDeadVideo       func(videoID string)
+	apiClient         *http.Client
+	streamClient      *http.Client
+	freshAPIClient    *http.Client
+	freshStreamClient *http.Client
+	warpAPIClient     *http.Client
+	warpStreamClient  *http.Client
 
 	mu                     sync.RWMutex
 	videoCache             map[string]cachedVideo
@@ -105,16 +108,176 @@ func newTransport(proxyFunc func(*http.Request) (*url.URL, error), responseHeade
 		Proxy: proxyFunc,
 		DialContext: (&net.Dialer{
 			Timeout:   8 * time.Second,
-			KeepAlive: 30 * time.Second,
+			KeepAlive: 15 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2: true,
+		// A silently dropped (NAT / reverse-proxy) idle connection hangs every request that is
+		// multiplexed on it until the header timeout. Recycle idle connections early and let
+		// HTTP/2 detect a dead connection with a ping instead of waiting out the full timeout.
+		HTTP2: &http.HTTP2Config{
+			SendPingTimeout: 6 * time.Second,
+			PingTimeout:     4 * time.Second,
+		},
 		MaxIdleConns:          120,
 		MaxIdleConnsPerHost:   32,
-		IdleConnTimeout:       90 * time.Second,
+		IdleConnTimeout:       25 * time.Second,
 		TLSHandshakeTimeout:   8 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: responseHeaderTimeout,
 	}
+}
+
+// buildFreshClients returns clients that never reuse a pooled connection (HTTP/1.1, no keep-alive).
+// They are used to race a second attempt when the pooled connection is stalled.
+func buildFreshClients(proxyFunc func(*http.Request) (*url.URL, error)) (api *http.Client, stream *http.Client) {
+	mk := func(hdr time.Duration) *http.Transport {
+		return &http.Transport{
+			Proxy: proxyFunc,
+			DialContext: (&net.Dialer{
+				Timeout:   8 * time.Second,
+				KeepAlive: 15 * time.Second,
+			}).DialContext,
+			DisableKeepAlives:     true,
+			ForceAttemptHTTP2:     false,
+			TLSHandshakeTimeout:   8 * time.Second,
+			ResponseHeaderTimeout: hdr,
+		}
+	}
+	api = &http.Client{Timeout: 14 * time.Second, Transport: mk(10 * time.Second)}
+	stream = &http.Client{
+		Timeout:   0,
+		Transport: mk(14 * time.Second),
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	return api, stream
+}
+
+// cancelOnCloseBody releases the winning attempt's context once the caller finishes reading.
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	if b.cancel != nil {
+		b.cancel()
+	}
+	return err
+}
+
+// doRaced sends an idempotent request on the pooled connection and, if no usable response
+// arrives within raceDelay (or the first attempt fails), races a second attempt on a brand-new
+// connection. The first usable (<500) response wins; the loser is cancelled.
+func (s *Service) doRaced(req *http.Request, isStream bool) (*http.Response, error) {
+	primary, fresh := s.apiClient, s.freshAPIClient
+	if isStream {
+		primary, fresh = s.streamClient, s.freshStreamClient
+	}
+	if fresh == nil || (req.Method != http.MethodGet && req.Method != http.MethodHead) || req.Body != nil {
+		return primary.Do(req)
+	}
+
+	type result struct {
+		idx  int
+		resp *http.Response
+		err  error
+	}
+	ch := make(chan result, 2)
+	var cancels [2]context.CancelFunc
+	launch := func(idx int, c *http.Client) {
+		ctx, cancel := context.WithCancel(req.Context())
+		cancels[idx] = cancel
+		r := req.Clone(ctx)
+		go func() {
+			resp, err := c.Do(r)
+			ch <- result{idx: idx, resp: resp, err: err}
+		}()
+	}
+	drain := func(n int) {
+		if n <= 0 {
+			return
+		}
+		go func() {
+			for i := 0; i < n; i++ {
+				if r := <-ch; r.resp != nil {
+					r.resp.Body.Close()
+				}
+			}
+		}()
+	}
+
+	delay := s.raceDelay
+	if delay <= 0 {
+		delay = 3500 * time.Millisecond
+	}
+	launch(0, primary)
+	pending := 1
+	secondLaunched := false
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	var lastBad *result
+	for pending > 0 {
+		select {
+		case <-req.Context().Done():
+			for _, c := range cancels {
+				if c != nil {
+					c()
+				}
+			}
+			drain(pending)
+			return nil, req.Context().Err()
+		case <-timer.C:
+			if !secondLaunched {
+				secondLaunched = true
+				pending++
+				launch(1, fresh)
+			}
+		case r := <-ch:
+			pending--
+			if r.err == nil && r.resp != nil && r.resp.StatusCode < 500 {
+				other := 1 - r.idx
+				if cancels[other] != nil {
+					cancels[other]()
+				}
+				drain(pending)
+				if lastBad != nil && lastBad.resp != nil {
+					lastBad.resp.Body.Close()
+				}
+				if r.resp.Body != nil {
+					r.resp.Body = &cancelOnCloseBody{ReadCloser: r.resp.Body, cancel: cancels[r.idx]}
+				}
+				return r.resp, nil
+			}
+			if lastBad != nil && lastBad.resp != nil {
+				lastBad.resp.Body.Close()
+			}
+			rc := r
+			lastBad = &rc
+			if !secondLaunched {
+				secondLaunched = true
+				pending++
+				launch(1, fresh)
+			}
+		}
+	}
+
+	for _, c := range cancels {
+		if c != nil && lastBad != nil && lastBad.resp == nil {
+			c()
+		}
+	}
+	if lastBad == nil {
+		return nil, fmt.Errorf("upstream request failed")
+	}
+	if lastBad.resp != nil {
+		lastBad.resp.Body = &cancelOnCloseBody{ReadCloser: lastBad.resp.Body, cancel: cancels[lastBad.idx]}
+		return lastBad.resp, nil
+	}
+	return nil, lastBad.err
 }
 
 func buildClients(proxyFunc func(*http.Request) (*url.URL, error)) (*http.Client, *http.Client) {
@@ -147,6 +310,7 @@ func NewService(companionBase string, upstream string) *Service {
 	upstream = strings.TrimRight(strings.TrimSpace(upstream), "/")
 
 	apiClient, streamClient := buildClients(http.ProxyFromEnvironment)
+	freshAPIClient, freshStreamClient := buildFreshClients(http.ProxyFromEnvironment)
 
 	warpProxyURL := strings.TrimSpace(os.Getenv("WARP_PROXY"))
 	if warpProxyURL == "" {
@@ -167,8 +331,11 @@ func NewService(companionBase string, upstream string) *Service {
 		WarpProxyURL:           warpProxyURL,
 		warpHostPort:           warpHostPort,
 		hedgeDelay:             3 * time.Second,
+		raceDelay:              3500 * time.Millisecond,
 		apiClient:              apiClient,
 		streamClient:           streamClient,
+		freshAPIClient:         freshAPIClient,
+		freshStreamClient:      freshStreamClient,
 		warpAPIClient:          warpAPIClient,
 		warpStreamClient:       warpStreamClient,
 		videoCache:             make(map[string]cachedVideo),
@@ -288,7 +455,17 @@ func (s *Service) tripWarpBackoff() {
 	s.warpMu.Unlock()
 }
 
-func (s *Service) doDirectRequest(req *http.Request, isStream bool) (*http.Response, error) {
+// doDirectRequest performs a single attempt. fresh=true forces a brand-new connection
+// (used for hedged attempts so they never share a stalled pooled connection).
+func (s *Service) doDirectRequest(req *http.Request, isStream bool, fresh bool) (*http.Response, error) {
+	if fresh {
+		if isStream && s.freshStreamClient != nil {
+			return s.freshStreamClient.Do(req)
+		}
+		if !isStream && s.freshAPIClient != nil {
+			return s.freshAPIClient.Do(req)
+		}
+	}
 	if isStream {
 		return s.streamClient.Do(req)
 	}
@@ -334,7 +511,7 @@ func (s *Service) doRequest(req *http.Request, isStream bool, bodyPayload []byte
 		return directClient.Do(r2)
 	}
 
-	resp, err := directClient.Do(req)
+	resp, err := s.doRaced(req, isStream)
 	if (err != nil || (resp != nil && (resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode >= 502))) && warpAllowed {
 		if resp != nil {
 			resp.Body.Close()
@@ -703,7 +880,7 @@ func (s *Service) doHedgedMediaRequest(r *http.Request, method, rawURL string, b
 		req, err := buildUpstreamMediaRequest(ctx, method, cands[idx].url, r, bodyBytes)
 		var resp *http.Response
 		if err == nil {
-			resp, err = s.doDirectRequest(req, true)
+			resp, err = s.doDirectRequest(req, true, idx > 0)
 		}
 
 		stateMu.Lock()
@@ -863,7 +1040,7 @@ func (s *Service) doHedgedMediaRequest(r *http.Request, method, rawURL string, b
 			lastErr = err
 			continue
 		}
-		resp, doErr := s.doDirectRequest(req, true)
+		resp, doErr := s.doDirectRequest(req, true, true)
 		if isUsable(resp, doErr) {
 			clearLastErrResp()
 			s.recordPreferredEdge(primaryHost, cands[idx].edgeHost)
