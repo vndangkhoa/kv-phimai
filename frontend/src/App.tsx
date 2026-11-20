@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { IoChevronForward } from 'react-icons/io5';
+import { Button } from '@astryxdesign/core/Button';
+import { IconButton } from '@astryxdesign/core/IconButton';
+import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
+import { EmptyState } from '@astryxdesign/core/EmptyState';
+import { Skeleton } from '@astryxdesign/core/Skeleton';
+import { Heading } from '@astryxdesign/core/Heading';
+import { Text } from '@astryxdesign/core/Text';
+import { ChevronRight, Film as FilmIcon, RotateCcw } from 'lucide-react';
 import type { Film, FilterState } from './types/phimai';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
@@ -649,7 +656,7 @@ export function App() {
   const isWatchMode = routeView === 'watch' && Boolean(activeFilm);
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: 'var(--yt-background)', color: 'var(--yt-text-primary)' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: 'var(--color-background-body, #0d0e14)', color: 'var(--color-text-primary, #f4f4f6)' }}>
       <Header
         query={filters.query}
         onQueryChange={(q) => {
@@ -732,6 +739,46 @@ export function App() {
           />
         ) : (
           <div className="yt-home-grid-wrapper">
+            {/* Cinema Screening Header Strip (No Kicker above Heading) */}
+            <div className="phimai-screening-bar">
+              <div className="phimai-home-heading-group">
+                <Heading level={1} className="phimai-home-heading">
+                  {filters.sort === 'saved'
+                    ? 'Phim Đã Lưu'
+                    : filters.sort === 'history'
+                      ? 'Lịch Sử Đã Xem'
+                      : filters.channel
+                        ? filters.channel
+                        : filters.cat !== 'all'
+                          ? CAT_LABEL[filters.cat] || filters.cat
+                          : 'Kho Phim AI Chọn Lọc'}
+                </Heading>
+                <Text size="sm" color="secondary" hasTabularNumbers>
+                  {gridFilms.length.toLocaleString('vi-VN')} tựa phim
+                </Text>
+              </div>
+
+              <div className="phimai-sort-scroll">
+                <SegmentedControl
+                  size={isMobileViewport ? 'sm' : 'md'}
+                  label="Sắp xếp danh sách phim"
+                  value={
+                    filters.sort === 'hot' || filters.sort === 'new' || filters.sort === 'topview'
+                      ? filters.sort
+                      : 'random'
+                  }
+                  onChange={(nextSort) =>
+                    setFilters({ sort: nextSort as FilterState['sort'] })
+                  }
+                >
+                  <SegmentedControlItem value="random" label="Đề xuất" />
+                  <SegmentedControlItem value="hot" label="Thịnh hành" />
+                  <SegmentedControlItem value="new" label="Mới nhất" />
+                  <SegmentedControlItem value="topview" label="Nhiều xem" />
+                </SegmentedControl>
+              </div>
+            </div>
+
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: '18px', position: 'relative' }}>
               <div ref={chipBarRef} className="yt-chip-bar" style={{ flex: 1 }}>
                 {quickChips.map((chip) => (
@@ -754,64 +801,73 @@ export function App() {
                   </button>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => chipBarRef.current?.scrollBy({ left: 220, behavior: 'smooth' })}
-                className="hidden-mobile"
-                style={{
-                  background: 'var(--yt-hover)',
-                  border: 'none',
-                  color: 'var(--yt-text-primary)',
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  marginLeft: '8px',
-                  flexShrink: 0,
-                }}
-                title="Xem thêm thẻ"
-              >
-                <IoChevronForward size={16} />
-              </button>
+              <div className="hidden-mobile" style={{ marginLeft: '8px', flexShrink: 0 }}>
+                <IconButton
+                  variant="secondary"
+                  size="sm"
+                  label="Xem thêm thẻ"
+                  tooltip="Xem thêm thể loại"
+                  onClick={() => chipBarRef.current?.scrollBy({ left: 220, behavior: 'smooth' })}
+                  icon={<ChevronRight size={16} strokeWidth={1.75} />}
+                />
+              </div>
             </div>
 
             {(filters.query || filters.channel || filters.sort === 'saved' || filters.sort === 'history') && (
-              <div style={{ marginBottom: '14px', fontSize: '13.5px', color: 'var(--yt-text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span>
-                  Tìm thấy <strong style={{ color: 'var(--yt-text-primary)' }}>{gridFilms.length}</strong> bộ phim
+              <div
+                style={{
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '10px',
+                }}
+              >
+                <Text size="sm" color="secondary" hasTabularNumbers>
+                  Tìm thấy <strong style={{ color: 'var(--color-text-primary)' }}>{gridFilms.length}</strong> bộ phim
                   {filters.channel ? ` từ kênh "${filters.channel}"` : ''}
                   {filters.query ? ` cho "${filters.query}"` : ''}
-                </span>
-                <button
-                  type="button"
+                </Text>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  label="Đặt lại bộ lọc"
+                  icon={<RotateCcw size={14} strokeWidth={1.75} />}
                   onClick={() => setFilters(DEFAULT_FILTERS)}
-                  style={{ background: 'none', border: 'none', color: 'var(--yt-blue)', cursor: 'pointer', fontWeight: 600 }}
-                >
-                  Đặt lại bộ lọc
-                </button>
+                />
               </div>
             )}
 
             {loading && visibleFilms.length === 0 ? (
               <div className="yt-home-video-grid">
                 {Array.from({ length: 12 }).map((_, i) => (
-                  <div key={i} className="skeleton" style={{ aspectRatio: '16/9', borderRadius: '12px' }} />
+                  <div key={i} className="yt-video-card-container">
+                    <Skeleton width="100%" height={176} radius={2} index={i} />
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                      <Skeleton width={36} height={36} radius="rounded" index={i} />
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <Skeleton width="92%" height={15} radius={1} index={i} />
+                        <Skeleton width="64%" height={12} radius={1} index={i} />
+                      </div>
+                    </div>
+                  </div>
                 ))}
               </div>
             ) : visibleFilms.length === 0 ? (
-              <div style={{ padding: '48px 16px', textAlign: 'center', color: 'var(--yt-text-secondary)' }}>
-                <p style={{ fontSize: '16px', marginBottom: '12px' }}>Không tìm thấy phim phù hợp.</p>
-                <button
-                  type="button"
-                  onClick={() => setFilters(DEFAULT_FILTERS)}
-                  className="watch-sub-btn unsubscribed"
-                  style={{ height: '38px', padding: '0 20px' }}
-                >
-                  Xem toàn bộ {allFilms.length} phim
-                </button>
+              <div style={{ padding: '48px 16px' }}>
+                <EmptyState
+                  icon={<FilmIcon size={34} strokeWidth={1.75} />}
+                  title="Không tìm thấy phim phù hợp"
+                  description="Thử từ khóa khác hoặc đặt lại bộ lọc để quay về toàn bộ danh mục phim AI."
+                  actions={
+                    <Button
+                      variant="primary"
+                      label={`Xem toàn bộ ${allFilms.length} phim`}
+                      onClick={() => setFilters(DEFAULT_FILTERS)}
+                    />
+                  }
+                />
               </div>
             ) : (
               <>
@@ -829,13 +885,12 @@ export function App() {
                 </div>
                 {hasMore && (
                   <div ref={loadMoreTriggerRef} style={{ padding: '28px', textAlign: 'center' }}>
-                    <button
-                      type="button"
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      label={`Tải thêm phim (${gridFilms.length - visibleFilms.length} phim còn lại)`}
                       onClick={() => setShownCount((c) => c + 30)}
-                      className="watch-action-pill"
-                    >
-                      Tải thêm phim ({gridFilms.length - visibleFilms.length} phim còn lại)
-                    </button>
+                    />
                   </div>
                 )}
               </>

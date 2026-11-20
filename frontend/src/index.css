@@ -1,136 +1,104 @@
+@import '@astryxdesign/core/reset.css';
+@import './theme/preflight.css';
+@import '@astryxdesign/core/astryx.css';
+@import './theme/cinema-noir.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --yt-background: #0f0f0f;
-    --yt-surface: #0f0f0f;
-    --yt-hover: #272727;
-    --yt-active: #3f3f3f;
-    --yt-border: #383838;
+  :root,
+  [data-theme='dark'] {
+    --yt-background: var(--color-background-body, #0d0e14);
+    --yt-surface: var(--color-background-surface, #161822);
+    --yt-hover: var(--color-background-popover, #1e2130);
+    --yt-active: #272b3e;
+    --yt-border: var(--color-border, rgba(244, 244, 246, 0.11));
+    --yt-border-strong: var(--color-border-emphasized, rgba(244, 244, 246, 0.24));
 
-    --yt-text-primary: #f1f1f1;
-    --yt-text-secondary: #aaaaaa;
+    --yt-text-primary: var(--color-text-primary, #f4f4f6);
+    --yt-text-secondary: var(--color-text-secondary, #c4c8d9);
+    --yt-text-muted: #989fb8;
 
-    --yt-brand-red: #ff0000;
-    --yt-blue: #3ea6ff;
+    --yt-brand-red: #e50914;
+    --yt-gold: var(--color-accent, #ffd875);
+    --yt-amber: var(--color-warning, #e6b949);
+    --yt-blue: var(--color-accent, #ffd875);
 
-    --yt-search-bg: #121212;
-    --yt-search-border: #303030;
-    --yt-search-btn: #222222;
+    --yt-search-bg: #12141e;
+    --yt-search-border: rgba(244, 244, 246, 0.14);
+    --yt-search-btn: #1e2130;
 
-    --yt-header-height: 56px;
-    --yt-sidebar-width-full: 240px;
+    --yt-header-height: 60px;
+    --yt-sidebar-width-full: 248px;
     --yt-sidebar-width-mini: 0px;
 
     --background: var(--yt-background);
     --foreground: var(--yt-text-primary);
 
-    --yt-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    --yt-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
-    --yt-transition: all 0.2s cubic-bezier(0.05, 0, 0, 1);
+    --yt-shadow: var(--shadow-low, 0 4px 12px -4px rgba(4, 5, 10, 0.6));
+    --yt-shadow-lg: var(--shadow-med, 0 14px 34px -10px rgba(4, 5, 10, 0.72));
+    --yt-transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 
-    --yt-card-hover-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    --yt-avatar-bg: #808080;
-  }
-
-  [data-theme='dark'] {
-    --yt-background: #0f0f0f;
-    --yt-surface: #0f0f0f;
-    --yt-hover: #272727;
-    --yt-active: #3f3f3f;
-    --yt-border: #383838;
-
-    --yt-text-primary: #f1f1f1;
-    --yt-text-secondary: #aaaaaa;
-
-    --yt-brand-red: #ff0000;
-    --yt-blue: #3ea6ff;
-
-    --yt-search-bg: #121212;
-    --yt-search-border: #303030;
-    --yt-search-btn: #222222;
-
-    --yt-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    --yt-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
-
-    --background: #0f0f0f;
-    --foreground: #f1f1f1;
-
-    --yt-card-hover-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    --yt-card-hover-shadow: 0 14px 34px -10px rgba(4, 5, 10, 0.78);
+    --yt-avatar-bg: #1e2130;
   }
 
   [data-theme='amoled'] {
-    --yt-background: #000000;
-    --yt-surface: #0a0a0a;
-    --yt-hover: #141414;
-    --yt-active: #1e1e1e;
-    --yt-border: #222222;
+    --yt-background: #06070b;
+    --yt-surface: #0d0e14;
+    --yt-hover: #161822;
+    --yt-active: #1e2130;
+    --yt-border: rgba(244, 244, 246, 0.11);
 
-    --yt-text-primary: #ffffff;
-    --yt-text-secondary: #aaaaaa;
+    --yt-text-primary: #f4f4f6;
+    --yt-text-secondary: #c4c8d9;
 
-    --yt-search-bg: #050505;
-    --yt-search-border: #1f1f1f;
-    --yt-search-btn: #121212;
+    --yt-search-bg: #0d0e14;
+    --yt-search-border: rgba(244, 244, 246, 0.14);
+    --yt-search-btn: #161822;
 
-    --yt-shadow: 0 4px 12px rgba(0, 0, 0, 0.9);
-    --yt-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.95);
+    --yt-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.85);
+    --yt-shadow-lg: 0 14px 34px -10px rgba(0, 0, 0, 0.9);
 
-    --background: #000000;
-    --foreground: #ffffff;
+    --background: #06070b;
+    --foreground: #f4f4f6;
 
-    --yt-card-hover-shadow: 0 4px 16px rgba(0, 0, 0, 0.8);
+    --yt-card-hover-shadow: 0 14px 34px -10px rgba(0, 0, 0, 0.85);
   }
-
-  [data-theme='light'] {
-    --yt-background: #ffffff;
-    --yt-surface: #ffffff;
-    --yt-hover: #f2f2f2;
-    --yt-active: #e5e5e5;
-    --yt-border: #e5e5e5;
-
-    --yt-text-primary: #0f0f0f;
-    --yt-text-secondary: #606060;
-
-    --yt-brand-red: #ff0000;
-    --yt-blue: #065fd4;
-
-    --yt-search-bg: #ffffff;
-    --yt-search-border: #cccccc;
-    --yt-search-btn: #f8f8f8;
-
-    --yt-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    --yt-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
-
-    --background: #ffffff;
-    --foreground: #0f0f0f;
-
-    --yt-card-hover-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  }
-
 
   html {
     scroll-behavior: smooth;
+    color-scheme: dark;
+    accent-color: #ffd875;
+    scrollbar-color: rgba(196, 200, 217, 0.30) #0d0e14;
+    background-color: var(--color-background-body, #0d0e14);
+    color: var(--color-text-primary, #f4f4f6);
   }
 
   body {
     background-color: var(--yt-background);
     color: var(--yt-text-primary);
-    font-family: 'Roboto', Arial, sans-serif;
+    font-family: var(--font-family-body, 'Be Vietnam Pro', system-ui, -apple-system, sans-serif);
     margin: 0;
     padding: 0;
     overflow-x: hidden;
   }
 
-  ::-webkit-scrollbar {
-    display: none;
+  ::selection {
+    background: rgba(255, 216, 117, 0.28);
+    color: #f4f4f6;
   }
 
-  * {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+  input,
+  textarea {
+    caret-color: #ffd875;
+  }
+
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-accent, #ffd875);
+    outline-offset: 2px;
   }
 }
 
@@ -408,19 +376,15 @@
 
 /* ===== TYPOGRAPHY ===== */
 
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  margin: 0;
-  font-weight: 500;
-}
+@layer base {
+  :where(h1, h2, h3, h4, h5, h6) {
+    margin: 0;
+  }
 
-a {
-  color: inherit;
-  text-decoration: none;
+  :where(a) {
+    color: inherit;
+    text-decoration: none;
+  }
 }
 
 /* ===== SEARCH BAR ===== */
@@ -2410,7 +2374,7 @@ a {
   width: 100%;
   font-size: 16px;
   color: var(--yt-text-primary);
-  font-family: Roboto, Arial, sans-serif;
+  font-family: var(--font-family-body, 'Be Vietnam Pro', system-ui, sans-serif);
   line-height: 24px;
 }
 
@@ -3898,7 +3862,7 @@ a {
   font-weight: 700;
   color: var(--yt-text-primary);
   margin: 0;
-  font-family: Roboto, Arial, sans-serif;
+  font-family: var(--font-family-body, 'Be Vietnam Pro', system-ui, sans-serif);
 }
 
 .yt-shorts-menu-btn {
@@ -4494,7 +4458,7 @@ a {
   font-weight: 700;
   color: var(--yt-text-primary);
   margin: 0;
-  font-family: Roboto, Arial, sans-serif;
+  font-family: var(--font-family-body, 'Be Vietnam Pro', system-ui, sans-serif);
 }
 
 .yt-explore-header-right {
@@ -4858,6 +4822,9 @@ a {
   border: none;
   cursor: pointer;
   padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: transform 0.12s ease;
 }
 .phimai-star-btn:hover {
@@ -4871,15 +4838,16 @@ a {
   border-radius: 9999px;
   font-size: 12px;
   font-weight: 500;
-  background: var(--yt-active);
-  color: var(--yt-text-primary);
-  border: none;
+  background: var(--color-background-popover, #1e2130);
+  color: var(--color-text-secondary, #c4c8d9);
+  border: 1px solid var(--yt-border);
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 .phimai-tag-pill:hover {
-  background: var(--yt-blue);
-  color: #000000;
+  background: var(--yt-gold, #ffd875);
+  border-color: var(--yt-gold, #ffd875);
+  color: #0d0e14;
 }
 
 .phimai-ep-chip {
@@ -4887,17 +4855,536 @@ a {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  border-radius: 10px;
+  border-radius: 8px;
   font-size: 12px;
   font-weight: 600;
-  background: var(--yt-hover);
-  color: var(--yt-text-primary);
+  font-variant-numeric: tabular-nums;
+  background: var(--yt-hover, #1e2130);
+  color: var(--yt-text-primary, #f4f4f6);
   border: 1px solid var(--yt-border);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-.phimai-ep-chip.active,
 .phimai-ep-chip:hover {
-  background: var(--yt-text-primary);
-  color: var(--yt-background);
+  background: #272b3e;
+  border-color: rgba(255, 216, 117, 0.42);
+  color: #ffd875;
+}
+.phimai-ep-chip.active {
+  background: var(--yt-gold, #ffd875);
+  border-color: var(--yt-gold, #ffd875);
+  color: #0d0e14;
+  font-weight: 700;
+}
+
+/* ==========================================================================
+   CINEMA NOIR × ASTRYX DESIGN SYSTEM LAYER
+   Unlayered utility & surface styles that sit cleanly above @layer astryx-theme
+   ========================================================================== */
+
+.phimai-tabular,
+.yt-card-duration-badge,
+.yt-card-stack-badge,
+.yt-card-meta-line,
+.yt-card-ep-chip,
+.yt-related-duration,
+.yt-related-meta,
+.player-time-display {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Preserve readable Be Vietnam Pro body family on dense Vietnamese film titles */
+.yt-card-title,
+.watch-title,
+.yt-related-title {
+  font-family: var(--font-family-body, 'Be Vietnam Pro', system-ui, sans-serif);
+}
+
+.phimai-display-heading {
+  font-family: 'Oswald', 'Be Vietnam Pro', system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.015em;
+  text-transform: uppercase;
+}
+
+/* Header: Obsidian Frosted Screening Ribbon */
+.yt-header {
+  height: var(--yt-header-height, 60px);
+  padding: 0 18px;
+  background-color: rgba(13, 14, 20, 0.90);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--yt-border);
+}
+
+.phimai-online-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  background-color: var(--yt-surface, #161822);
+  border: 1px solid var(--yt-border);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--yt-text-secondary, #c4c8d9);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Search Bar & Suggestions Popover (Astryx TextInput + Elevated Noir Dropdown) */
+.phimai-search-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 620px;
+  position: relative;
+}
+
+.phimai-search-input-wrap {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.yt-search-suggestions {
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background-color: var(--yt-hover, #1e2130);
+  border: 1px solid var(--yt-border-strong, rgba(244, 244, 246, 0.24));
+  border-radius: 12px;
+  box-shadow: var(--shadow-high, 0 24px 64px -16px rgba(0, 0, 0, 0.85));
+  padding: 6px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.yt-suggestion-item {
+  border-radius: 8px;
+  padding: 8px 10px;
+  gap: 10px;
+}
+
+.yt-suggestion-item:hover {
+  background-color: rgba(255, 216, 117, 0.08);
+}
+
+/* Docked Desktop Sidebar & Astryx Overlay Drawer */
+.yt-sidebar-container {
+  background-color: #0d0e14;
+  border-right: 1px solid var(--yt-border);
+  scrollbar-color: rgba(196, 200, 217, 0.25) transparent;
+}
+
+.yt-sidebar-container.expanded {
+  width: var(--yt-sidebar-width-full, 248px);
+}
+
+.yt-sidebar-scrollable {
+  padding: 12px 10px 32px;
+}
+
+.yt-sidebar-section-header {
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--yt-text-secondary);
+}
+
+.yt-sidebar-section-header.plain {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--yt-text-muted, #989fb8);
+}
+
+.yt-sidebar-item,
+.yt-sidebar-sub-item {
+  gap: 12px;
+  padding: 0 10px;
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  color: var(--yt-text-secondary);
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.yt-sidebar-item-icon {
+  color: var(--yt-text-muted, #989fb8);
+  transition: color 0.15s ease;
+}
+
+.yt-sidebar-item-text,
+.yt-sidebar-sub-name {
+  color: inherit;
+  font-size: 13.5px;
+}
+
+.yt-sidebar-item:hover,
+.yt-sidebar-sub-item:hover {
+  background-color: rgba(244, 244, 246, 0.06);
+  color: var(--yt-text-primary);
+}
+
+.yt-sidebar-item:hover .yt-sidebar-item-icon {
+  color: var(--yt-text-primary);
+}
+
+.yt-sidebar-item.active,
+.yt-sidebar-sub-item.active {
+  background-color: rgba(255, 216, 117, 0.12);
+  border-color: rgba(255, 216, 117, 0.28);
+  color: #ffd875;
+  font-weight: 600;
+}
+
+.yt-sidebar-item.active .yt-sidebar-item-icon {
+  color: #ffd875;
+}
+
+.phimai-sidebar-count {
+  font-family: var(--font-family-code, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  color: var(--yt-text-muted, #989fb8);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Home Screening Bar & Filter Chips */
+.phimai-screening-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.phimai-sort-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.phimai-sort-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.phimai-sort-scroll [role='radiogroup'] {
+  width: max-content;
+}
+
+.phimai-home-heading-group {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.phimai-home-heading {
+  font-family: 'Oswald', 'Be Vietnam Pro', system-ui, sans-serif;
+  font-size: clamp(1.5rem, 2.1vw, 2.05rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: 0.015em;
+  color: var(--yt-text-primary);
+  text-transform: uppercase;
+}
+
+.yt-chip-bar {
+  scroll-snap-type: x proximity;
+  gap: 8px;
+}
+
+.yt-filter-chip {
+  scroll-snap-align: start;
+  height: 34px;
+  padding: 0 13px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  background-color: var(--yt-surface, #161822);
+  color: var(--yt-text-secondary, #c4c8d9);
+  border: 1px solid var(--yt-border);
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+
+.yt-filter-chip:hover {
+  background-color: var(--yt-hover, #1e2130);
+  border-color: var(--yt-border-strong);
+  color: var(--yt-text-primary);
+}
+
+.yt-filter-chip:active {
+  transform: scale(0.97);
+}
+
+.yt-filter-chip.active {
+  background-color: var(--yt-gold, #ffd875);
+  border-color: var(--yt-gold, #ffd875);
+  color: #0d0e14;
+  font-weight: 700;
+}
+
+/* Cinema Noir Screening Cards (including Stacked Series Cards) */
+.yt-video-card-container {
+  background-color: var(--yt-surface, #161822);
+  border: 1px solid var(--yt-border);
+  border-radius: 12px;
+  padding: 10px;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.22s ease, box-shadow 0.22s ease;
+}
+
+.yt-video-card-container:hover {
+  transform: translateY(-3px);
+  border-color: rgba(255, 216, 117, 0.36);
+  box-shadow: var(--yt-card-hover-shadow);
+}
+
+.yt-card-thumb-wrapper {
+  border-radius: 8px;
+  background-color: #08090d;
+  box-shadow: none;
+}
+
+.yt-video-card-container:hover .yt-card-thumb-wrapper {
+  transform: none;
+  box-shadow: none;
+}
+
+.yt-card-stack-layer-2 {
+  background-color: #141724;
+  border: 1px solid rgba(255, 216, 117, 0.18);
+  border-bottom: none;
+}
+
+.yt-card-stack-layer-1 {
+  background-color: #1c2033;
+  border: 1px solid rgba(255, 216, 117, 0.28);
+  border-bottom: none;
+}
+
+.yt-card-stack-badge {
+  background-color: rgba(13, 14, 20, 0.88);
+  border: 1px solid rgba(255, 216, 117, 0.36);
+  color: #ffd875;
+  font-family: var(--font-family-code, 'JetBrains Mono', monospace);
+  font-size: 11px;
+}
+
+.yt-card-duration-badge {
+  background-color: rgba(13, 14, 20, 0.88);
+  border: 1px solid rgba(244, 244, 246, 0.14);
+  color: #f4f4f6;
+  font-family: var(--font-family-code, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+.yt-card-progress-bar-fill {
+  background-color: #e50914;
+}
+
+.yt-video-card-container:focus-within .yt-thumb-quick-actions {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .yt-thumb-quick-actions {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+}
+
+.yt-thumb-action-btn {
+  background-color: rgba(13, 14, 20, 0.86);
+  border: 1px solid rgba(244, 244, 246, 0.18);
+}
+
+.yt-card-details-row {
+  margin-top: 10px;
+  gap: 10px;
+}
+
+.yt-card-title {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--yt-text-primary);
+}
+
+.yt-card-channel-link {
+  font-size: 13px;
+  color: var(--yt-text-secondary, #c4c8d9);
+}
+
+.yt-card-meta-line {
+  font-size: 12.5px;
+  color: var(--yt-text-muted, #989fb8);
+}
+
+.yt-card-ep-chip {
+  background-color: var(--yt-hover, #1e2130);
+  border: 1px solid var(--yt-border);
+  color: var(--yt-text-secondary, #c4c8d9);
+  border-radius: 6px;
+  font-size: 11.5px;
+  padding: 3px 8px;
+}
+
+.yt-card-ep-chip:hover {
+  background-color: rgba(255, 216, 117, 0.16);
+  border-color: rgba(255, 216, 117, 0.42);
+  color: #ffd875;
+}
+
+/* Backend Notice Banner */
+.backend-setup-notice-wrap {
+  margin: 14px 24px 0;
+}
+
+@media (max-width: 768px) {
+  .backend-setup-notice-wrap {
+    margin: 10px 12px 0;
+  }
+}
+
+/* Watch Page Surfaces */
+.watch-player-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background-color: #05060a;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--yt-border);
+  box-shadow: var(--shadow-high, 0 24px 64px -16px rgba(0, 0, 0, 0.85));
+}
+
+.phimai-series-panel {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background-color: var(--yt-surface, #161822);
+  border: 1px solid var(--yt-border);
+}
+
+.watch-description-box {
+  background-color: var(--yt-surface, #161822);
+  border: 1px solid var(--yt-border);
+  border-radius: 12px;
+}
+
+.watch-description-box:hover {
+  background-color: #191c28;
+  border-color: var(--yt-border-strong);
+}
+
+.watch-description-text {
+  max-width: 68ch;
+  color: var(--yt-text-secondary);
+}
+
+.watch-secondary .yt-chip-bar {
+  gap: 6px;
+}
+
+.watch-secondary .yt-filter-chip {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+
+.yt-related-card {
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.yt-related-card:hover {
+  background-color: var(--yt-surface, #161822);
+  border-color: var(--yt-border);
+}
+
+.yt-related-thumb-container {
+  background-color: #08090d;
+  border: 1px solid rgba(244, 244, 246, 0.08);
+}
+
+.yt-related-duration {
+  background-color: rgba(13, 14, 20, 0.88);
+  border: 1px solid rgba(244, 244, 246, 0.14);
+  font-family: var(--font-family-code, 'JetBrains Mono', monospace);
+  font-size: 11px;
+  padding: 2px 5px;
+}
+
+/* Mobile Nav Bottom Dock */
+.mobile-nav {
+  background-color: rgba(13, 14, 20, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-top: 1px solid var(--yt-border);
+}
+
+/* Player Settings Modal */
+.player-settings-modal {
+  background: rgba(22, 24, 34, 0.96);
+  border: 1px solid var(--yt-border-strong, rgba(244, 244, 246, 0.24));
+  box-shadow: var(--shadow-high, 0 24px 64px -16px rgba(0, 0, 0, 0.85));
+}
+
+/* Cinema Crimson Primary CTA modifier on Astryx Button */
+.kv-cta--crimson {
+  background-color: #e50914 !important;
+  color: #ffffff !important;
+  border-color: #e50914 !important;
+}
+.kv-cta--crimson:hover:not([aria-disabled='true']) {
+  background-color: #c80812 !important;
+}
+
+/* Channel Directory & Playlist Cards */
+.phimai-channel-card,
+.phimai-playlist-card {
+  background-color: var(--yt-surface, #161822);
+  border: 1px solid var(--yt-border);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.phimai-channel-card:hover,
+.phimai-playlist-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 216, 117, 0.36);
+  box-shadow: var(--yt-card-hover-shadow);
+}
+
+.phimai-playlist-card.active {
+  border-color: var(--yt-gold, #ffd875);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yt-video-card-container,
+  .yt-card-thumb-img,
+  .yt-filter-chip,
+  .phimai-ep-chip,
+  .phimai-tag-pill {
+    transition: none !important;
+  }
+  .skeleton {
+    animation: none !important;
+  }
 }

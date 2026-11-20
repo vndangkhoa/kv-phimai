@@ -414,23 +414,29 @@ export function buildQualityList(data: VideoStreamPayload | null): QualityOption
     });
   }
 
-  // 2. Collect progressive formatStreams (muxed video+audio) as fallback or 360p/720p
+  // 2. Collect progressive formatStreams (muxed video+audio) as fallback or 360p/720p.
+  // If an adaptive-only entry already claimed this height, replace it with the muxed stream
+  // so progressive resilient fallback (e.g., itag=18 at 360p) is always available.
   const prog = Array.isArray(data.formatStreams) ? data.formatStreams : [];
   for (const f of prog) {
     const h = parseVideoHeight(f) || 360;
-    if (!seenHeights.has(h)) {
+    const opt: QualityOption = {
+      id: String(f.itag || `prog_${h}`),
+      label: formatQualityLabel(h, f.fps),
+      height: h,
+      itag: f.itag ? String(f.itag) : undefined,
+      fps: f.fps,
+      bitrate: Number(f.bitrate || 0),
+      url: proxySameOriginUrl(f.url),
+      hasAudio: true,
+      type: f.type,
+    };
+    const existingIdx = options.findIndex((o) => o.height === h);
+    if (existingIdx < 0) {
       seenHeights.add(h);
-      options.push({
-        id: String(f.itag || `prog_${h}`),
-        label: formatQualityLabel(h, f.fps),
-        height: h,
-        itag: f.itag ? String(f.itag) : undefined,
-        fps: f.fps,
-        bitrate: Number(f.bitrate || 0),
-        url: proxySameOriginUrl(f.url),
-        hasAudio: true,
-        type: f.type,
-      });
+      options.push(opt);
+    } else if (!options[existingIdx].hasAudio) {
+      options[existingIdx] = opt;
     }
   }
 

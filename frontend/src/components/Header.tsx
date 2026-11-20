@@ -1,11 +1,12 @@
-import React, { useState, useRef, useMemo } from 'react';
-import {
-  IoMenuOutline,
-  IoSearchOutline,
-  IoCloseOutline,
-  IoArrowBack,
-} from 'react-icons/io5';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
+import { IconButton } from '@astryxdesign/core/IconButton';
+import { Button } from '@astryxdesign/core/Button';
+import { TextInput } from '@astryxdesign/core/TextInput';
+import { StatusDot } from '@astryxdesign/core/StatusDot';
+import { Kbd } from '@astryxdesign/core/Kbd';
+import { Menu, Search, ArrowLeft } from 'lucide-react';
 import type { Film } from '../types/phimai';
+import { getThumbUrl } from '../utils/phimaiUtils';
 import { Logo } from './Logo';
 
 interface HeaderProps {
@@ -33,6 +34,20 @@ export function Header({
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) {
+        return;
+      }
+      e.preventDefault();
+      inputRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   const suggestions = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q || !isFocused) return [];
@@ -50,8 +65,8 @@ export function Header({
     return matched;
   }, [query, isFocused, allFilms]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = (e?: React.FormEvent) => {
+    e?.preventDefault();
     onSubmitSearch(query);
     setIsFocused(false);
     setMobileSearchOpen(false);
@@ -61,17 +76,16 @@ export function Header({
     <header className="yt-header">
       {!mobileSearchOpen ? (
         <>
-          {/* Left: Hamburger + PhimAI Brand */}
+          {/* Left: Hamburger + PhimAI Brand + Live Online Pill */}
           <div className="yt-header-left" style={{ gap: '12px' }}>
-            <button
-              type="button"
-              className="yt-icon-btn"
+            <IconButton
+              variant="ghost"
+              size="md"
+              label="Danh mục"
+              tooltip="Danh mục"
               onClick={onToggleSidebar}
-              aria-label="Danh mục"
-              title="Danh mục"
-            >
-              <IoMenuOutline size={24} />
-            </button>
+              icon={<Menu size={20} strokeWidth={1.75} />}
+            />
 
             <a
               href="/"
@@ -83,107 +97,142 @@ export function Header({
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
+                marginLeft: 0,
                 textDecoration: 'none',
               }}
               title="PhimAI — Trang chủ"
             >
-              <Logo size={26} />
+              <Logo size={28} />
             </a>
 
-            <span
-              className="hidden-mobile"
-              style={{
-                fontSize: '11px',
-                fontWeight: 600,
-                color: '#10b981',
-                background: 'rgba(16, 185, 129, 0.12)',
-                padding: '3px 8px',
-                borderRadius: '999px',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              ● {onlineCount} đang xem
+            <span className="phimai-online-pill hidden-mobile">
+              <StatusDot variant="success" label={`${onlineCount} đang xem`} isPulsing />
+              <span>{onlineCount} đang xem</span>
             </span>
           </div>
 
-          {/* Center: Materialious Search Bar */}
-          <div className="yt-header-center hidden-mobile" style={{ position: 'relative' }}>
-            <form className="yt-compound-search-form" onSubmit={handleSubmit}>
-              <div className={`yt-search-input-box ${isFocused ? 'focused' : ''}`}>
-                {isFocused && (
-                  <div className="yt-search-leading-icon">
-                    <IoSearchOutline size={17} />
-                  </div>
-                )}
-                <input
+          {/* Center: Cinema Noir Search Bar with Astryx TextInput */}
+          <div
+            className="yt-header-center hidden-mobile"
+            style={{ position: 'relative' }}
+            onFocusCapture={() => setIsFocused(true)}
+            onBlurCapture={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                setTimeout(() => setIsFocused(false), 160);
+              }
+            }}
+          >
+            <form className="phimai-search-form" onSubmit={handleSubmit}>
+              <div className="phimai-search-input-wrap">
+                <TextInput
                   ref={inputRef}
-                  type="text"
+                  type="search"
+                  enterKeyHint="search"
+                  size="lg"
+                  label="Tìm kiếm phim AI"
+                  isLabelHidden
+                  startIcon="search"
+                  hasClear
+                  width="100%"
                   placeholder="Tìm kiếm 9.220+ phim AI, kênh, thể loại..."
                   value={query}
-                  onChange={(e) => onQueryChange(e.target.value)}
-                  onFocus={() => setIsFocused(true)}
-                  onBlur={() => setTimeout(() => setIsFocused(false), 180)}
+                  onChange={(val) => onQueryChange(val)}
+                  onEnter={() => handleSubmit()}
                 />
-                {query && (
-                  <button
-                    type="button"
-                    className="yt-search-clear-btn"
-                    onClick={() => {
-                      onQueryChange('');
-                      inputRef.current?.focus();
+
+                {!query && !isFocused && (
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      position: 'absolute',
+                      right: '10px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      pointerEvents: 'none',
+                      opacity: 0.72,
                     }}
-                    title="Xóa từ khóa"
                   >
-                    <IoCloseOutline size={18} />
-                  </button>
+                    <Kbd keys="/" />
+                  </span>
                 )}
               </div>
-              <button type="submit" className="yt-search-submit-btn" title="Tìm kiếm">
-                <IoSearchOutline size={20} />
-              </button>
+
+              <Button
+                type="submit"
+                variant="secondary"
+                size="lg"
+                label="Tìm"
+                tooltip="Tìm kiếm"
+                icon={<Search size={16} strokeWidth={1.75} />}
+              />
             </form>
 
             {suggestions.length > 0 && (
-              <div className="yt-search-suggestions">
+              <div className="yt-search-suggestions" role="listbox" aria-label="Gợi ý tìm kiếm">
                 {suggestions.map((film) => (
-                  <div
+                  <button
+                    type="button"
                     key={film.id}
+                    role="option"
+                    aria-selected={false}
                     className="yt-suggestion-item"
-                    onMouseDown={() => {
+                    style={{ width: '100%', border: 'none', background: 'transparent', textAlign: 'left' }}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
                       setIsFocused(false);
                       onSelectFilm(film);
                     }}
                   >
-                    <IoSearchOutline size={15} className="yt-suggestion-icon" />
+                    <img
+                      src={getThumbUrl(film.id)}
+                      alt=""
+                      width={48}
+                      height={27}
+                      loading="lazy"
+                      style={{
+                        width: '48px',
+                        height: '27px',
+                        borderRadius: '4px',
+                        objectFit: 'cover',
+                        flexShrink: 0,
+                        backgroundColor: '#08090d',
+                      }}
+                    />
                     <span
                       style={{
                         flex: 1,
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
+                        fontSize: '13.5px',
+                        color: 'var(--color-text-primary)',
                       }}
                     >
                       {film.title}
                     </span>
-                    <span style={{ fontSize: '11px', color: 'var(--yt-text-secondary)' }}>
+                    <span
+                      className="phimai-tabular"
+                      style={{ fontSize: '11.5px', color: 'var(--color-text-secondary)', flexShrink: 0 }}
+                    >
                       {film.channel}
                     </span>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Right: Mobile Search only */}
+          {/* Right: Mobile Search trigger */}
           <div className="yt-header-right">
-            <button
-              type="button"
-              className="yt-icon-btn visible-mobile"
-              onClick={() => setMobileSearchOpen(true)}
-              aria-label="Tìm kiếm"
-            >
-              <IoSearchOutline size={22} />
-            </button>
+            <div className="visible-mobile">
+              <IconButton
+                variant="ghost"
+                size="md"
+                label="Tìm kiếm"
+                onClick={() => setMobileSearchOpen(true)}
+                icon={<Search size={20} strokeWidth={1.75} />}
+              />
+            </div>
           </div>
         </>
       ) : (
@@ -196,34 +245,36 @@ export function Header({
             width: '100%',
           }}
         >
-          <button
-            type="button"
-            className="yt-icon-btn"
+          <IconButton
+            variant="ghost"
+            size="md"
+            label="Đóng tìm kiếm"
             onClick={() => setMobileSearchOpen(false)}
-          >
-            <IoArrowBack size={22} />
-          </button>
-          <div className="yt-search-input-box focused" style={{ flex: 1 }}>
-            <input
-              autoFocus
-              type="text"
+            icon={<ArrowLeft size={20} strokeWidth={1.75} />}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <TextInput
+              type="search"
+              enterKeyHint="search"
+              size="lg"
+              label="Tìm kiếm phim AI"
+              isLabelHidden
+              hasAutoFocus
+              hasClear
+              width="100%"
               placeholder="Tìm tên phim, kênh, thể loại..."
               value={query}
-              onChange={(e) => onQueryChange(e.target.value)}
+              onChange={(val) => onQueryChange(val)}
+              onEnter={() => handleSubmit()}
             />
-            {query && (
-              <button
-                type="button"
-                className="yt-search-clear-btn"
-                onClick={() => onQueryChange('')}
-              >
-                <IoCloseOutline size={18} />
-              </button>
-            )}
           </div>
-          <button type="submit" className="yt-icon-btn">
-            <IoSearchOutline size={21} />
-          </button>
+          <IconButton
+            type="submit"
+            variant="secondary"
+            size="md"
+            label="Tìm kiếm"
+            icon={<Search size={18} strokeWidth={1.75} />}
+          />
         </form>
       )}
     </header>

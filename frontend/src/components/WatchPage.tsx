@@ -1,19 +1,23 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { Avatar } from '@astryxdesign/core/Avatar';
+import { Badge } from '@astryxdesign/core/Badge';
+import { Button } from '@astryxdesign/core/Button';
+import { Heading } from '@astryxdesign/core/Heading';
+import { TextInput } from '@astryxdesign/core/TextInput';
+import { ToggleButton } from '@astryxdesign/core/ToggleButton';
 import {
-  IoStar,
-  IoStarOutline,
-  IoBookmark,
-  IoBookmarkOutline,
-  IoShareSocialOutline,
-  IoExpandOutline,
-  IoCheckmarkCircle,
-  IoTimeOutline,
-  IoSendOutline,
-  IoArrowBack,
-  IoPersonAddOutline,
-  IoCheckmark,
-  IoRefreshOutline,
-} from 'react-icons/io5';
+  Star,
+  Bookmark,
+  Share2,
+  Maximize2,
+  BadgeCheck,
+  Clock,
+  Send,
+  ArrowLeft,
+  UserPlus,
+  Check,
+  RefreshCw,
+} from 'lucide-react';
 import type { Film, FilterState } from '../types/phimai';
 import {
   CAT_LABEL,
@@ -79,6 +83,7 @@ export function WatchPage({
 
   // Rich detail & comments state
   const [richBlurbLong, setRichBlurbLong] = useState<string>(film.blurbLong || '');
+  const [streamMeta, setStreamMeta] = useState<{ title?: string; channel?: string; viewCount?: number }>({});
   const [apiRelated, setApiRelated] = useState<Film[]>([]);
   const [apiSeries, setApiSeries] = useState<Film[]>([]);
   const [comments, setComments] = useState<CommentItem[]>([]);
@@ -125,6 +130,7 @@ export function WatchPage({
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     setExpandedDesc(false);
     setRichBlurbLong(film.blurbLong || '');
+    setStreamMeta({});
     setDiscoverMsg(null);
   }, [film.id, film.blurbLong]);
 
@@ -145,6 +151,13 @@ export function WatchPage({
       .then((res) => {
         if (cancelled || !res) return;
         if (res.film?.blurbLong) setRichBlurbLong(res.film.blurbLong);
+        if (res.film?.title || res.title || res.film?.channel || res.author) {
+          setStreamMeta({
+            title: res.film?.title || res.title,
+            channel: res.film?.channel || res.author,
+            viewCount: res.viewCount,
+          });
+        }
         if (Array.isArray(res.related) && res.related.length > 0) setApiRelated(res.related);
         if (Array.isArray(res.series) && res.series.length > 0) {
           setApiSeries(res.series);
@@ -229,9 +242,24 @@ export function WatchPage({
     }
   };
 
+  const displayTitle =
+    film.title && film.title !== 'Đang tải phim AI...'
+      ? film.title
+      : streamMeta.title || film.title;
+  const displayChannel =
+    film.channel && film.channel !== 'PhimAI'
+      ? film.channel
+      : streamMeta.channel || film.channel;
+  const displayViews =
+    film.views && film.views !== '0'
+      ? film.views
+      : streamMeta.viewCount && streamMeta.viewCount > 0
+        ? String(streamMeta.viewCount)
+        : film.views;
+
   const channelFilmCount = useMemo(
-    () => allFilms.filter((f) => f.channel === film.channel).length,
-    [allFilms, film.channel]
+    () => allFilms.filter((f) => f.channel === displayChannel).length,
+    [allFilms, displayChannel]
   );
 
   const relatedList = useMemo(() => {
@@ -387,10 +415,10 @@ export function WatchPage({
   };
 
   return (
-    <div style={{ backgroundColor: 'var(--yt-background)', color: 'var(--yt-text-primary)', minHeight: 'calc(100vh - 56px)' }}>
+    <div style={{ backgroundColor: 'var(--color-background-body, #0d0e14)', color: 'var(--color-text-primary, #f4f4f6)', minHeight: 'calc(100vh - 60px)' }}>
       {/* Theater Mode Top Wide Player Banner */}
       {wideMode && (
-        <div style={{ width: '100%', backgroundColor: '#000000', display: 'flex', justifyContent: 'center' }}>
+        <div style={{ width: '100%', backgroundColor: '#05060a', display: 'flex', justifyContent: 'center', borderBottom: '1px solid var(--yt-border)' }}>
           <div style={{ width: '100%', maxWidth: '1750px', aspectRatio: '16/9', maxHeight: 'calc(100vh - 150px)', position: 'relative' }}>
             <div id="watch-player-slot" style={{ width: '100%', height: '100%' }} />
           </div>
@@ -413,82 +441,77 @@ export function WatchPage({
         {/* Left / Main Column */}
         <div className="watch-main" style={{ minWidth: 0, width: '100%' }}>
           {!wideMode && (
-            <div
-              style={{
-                position: 'relative',
-                width: '100%',
-                aspectRatio: '16/9',
-                backgroundColor: '#000000',
-                borderRadius: '14px',
-                overflow: 'hidden',
-              }}
-            >
+            <div className="watch-player-frame">
               <div id="watch-player-slot" style={{ width: '100%', height: '100%' }} />
             </div>
           )}
 
-          {/* Back to catalog breadcrumb + Title */}
+          {/* Clean Navigation Back Row + Title (No eyebrow kickers above Heading) */}
           <div style={{ marginTop: '14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-              <button
-                type="button"
+            <div style={{ marginBottom: '10px' }}>
+              <Button
+                variant="ghost"
+                size="sm"
+                label="Danh sách phim"
+                icon={<ArrowLeft size={14} strokeWidth={1.75} />}
                 onClick={onBackHome}
-                className="watch-action-pill"
-                style={{ height: '28px', padding: '0 10px', fontSize: '12px' }}
-              >
-                <IoArrowBack size={14} />
-                <span>Danh sách phim</span>
-              </button>
-              {film.rank > 0 && (
-                <span style={{ fontSize: '12px', color: 'var(--yt-blue)', fontWeight: 700 }}>
-                  #{film.rank}
-                </span>
-              )}
-              {film.tool && (
-                <span
-                  style={{
-                    fontSize: '11.5px',
-                    color: 'var(--yt-text-secondary)',
-                    backgroundColor: 'var(--yt-hover)',
-                    padding: '2px 8px',
-                    borderRadius: '6px',
-                  }}
-                >
-                  {film.tool}
-                </span>
-              )}
+              />
             </div>
 
-            <h1 className="watch-title" style={{ margin: '0 0 12px', fontSize: isMobile ? '17px' : '20px' }}>
-              {film.title}
-            </h1>
+            <Heading
+              level={1}
+              className="watch-title"
+              weight="bold"
+              style={{
+                margin: '0 0 8px',
+                fontSize: isMobile ? '17px' : '20px',
+                fontFamily: 'var(--font-family-body, "Be Vietnam Pro", sans-serif)',
+                lineHeight: 1.32,
+              }}
+            >
+              {displayTitle}
+            </Heading>
+
+            {/* Metadata pills sit BELOW Heading per No-Kicker Rule */}
+            {(film.rank > 0 || film.tool) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                {film.rank > 0 && (
+                  <span
+                    className="phimai-tabular"
+                    style={{
+                      fontFamily: 'var(--font-family-code, monospace)',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      color: 'var(--color-accent, #ffd875)',
+                      backgroundColor: 'rgba(255, 216, 117, 0.12)',
+                      border: '1px solid rgba(255, 216, 117, 0.28)',
+                      padding: '2px 8px',
+                      borderRadius: '6px',
+                    }}
+                  >
+                    #{film.rank}
+                  </span>
+                )}
+                {film.tool && <Badge variant="neutral" label={film.tool} />}
+              </div>
+            )}
           </div>
 
-          {/* Channel & Action Pills Row */}
+          {/* Channel & Action Controls Row */}
           <div className="watch-meta-container">
             <div className="watch-channel-group">
               <div
-                onClick={() => onOpenChannel(film.channel)}
+                onClick={() => onOpenChannel(displayChannel)}
                 className="watch-channel-link"
                 style={{ cursor: 'pointer' }}
-                title={`Mở trang kênh ${film.channel}`}
+                title={`Mở trang kênh ${displayChannel}`}
               >
-                <div
-                  style={{
-                    width: '40px',
-                    height: '40px',
-                    borderRadius: '50%',
-                    backgroundColor: 'var(--yt-hover)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontWeight: 700,
-                    fontSize: '16px',
-                    flexShrink: 0,
-                  }}
-                >
-                  {(film.channel || 'P').charAt(0).toUpperCase()}
-                </div>
+                <Avatar
+                  size={40}
+                  name={displayChannel || 'PhimAI'}
+                  alt={displayChannel || 'PhimAI'}
+                  tooltip={false}
+                />
                 <div style={{ minWidth: 0 }}>
                   <div
                     style={{
@@ -497,49 +520,54 @@ export function WatchPage({
                       gap: '5px',
                       fontWeight: 600,
                       fontSize: '15px',
-                      color: 'var(--yt-text-primary)',
+                      color: 'var(--color-text-primary)',
                     }}
                   >
-                    <span>{film.channel}</span>
-                    <IoCheckmarkCircle size={14} color="var(--yt-text-secondary)" />
+                    <span>{displayChannel}</span>
+                    <BadgeCheck size={14} strokeWidth={1.75} style={{ color: 'var(--color-accent, #ffd875)' }} />
                   </div>
-                  <div style={{ fontSize: '12px', color: 'var(--yt-text-secondary)' }}>
+                  <div className="phimai-tabular" style={{ fontSize: '12px', color: 'var(--yt-text-muted, #989fb8)' }}>
                     {channelFilmCount} phim trong kho
                   </div>
                 </div>
               </div>
 
-              <button
-                type="button"
+              <Button
+                variant={subscribed ? 'secondary' : 'primary'}
+                size="md"
+                label={subscribed ? 'Đã đăng ký' : 'Đăng ký'}
+                icon={subscribed ? <Check size={15} strokeWidth={1.75} /> : <UserPlus size={15} strokeWidth={1.75} />}
                 onClick={() => {
                   const res = toggleChannelSubscription({
-                    name: film.channel,
+                    name: displayChannel,
                     thumbnail: getThumbUrl(film.id),
                   });
                   setSubscribed(res.subscribed);
                 }}
-                className={`watch-sub-btn ${subscribed ? 'subscribed' : 'unsubscribed'}`}
-                style={{ height: '36px', fontSize: '13px', padding: '0 14px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-              >
-                {subscribed ? <IoCheckmark size={15} /> : <IoPersonAddOutline size={14} />}
-                <span>{subscribed ? 'Đã đăng ký' : 'Đăng ký'}</span>
-              </button>
+              />
 
-              <button
-                type="button"
-                onClick={() => onOpenChannel(film.channel)}
-                className="watch-action-pill"
-                style={{ height: '36px', fontSize: '12.5px', padding: '0 12px' }}
-              >
-                <span>Trang kênh</span>
-              </button>
+              <Button
+                variant="secondary"
+                size="md"
+                label="Trang kênh"
+                onClick={() => onOpenChannel(displayChannel)}
+              />
             </div>
 
             <div className="watch-actions-scroll-strip">
               {/* Interactive 5-Star Rating Pill */}
               <div
-                className="watch-action-pill"
-                style={{ gap: '6px', cursor: 'default' }}
+                className="phimai-tabular"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  height: '32px',
+                  padding: '0 10px',
+                  borderRadius: '8px',
+                  backgroundColor: 'var(--yt-surface, #161822)',
+                  border: '1px solid var(--yt-border)',
+                }}
                 title="Chấm điểm bộ phim"
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1px' }}>
@@ -555,65 +583,55 @@ export function WatchPage({
                         onClick={() => handleRate(star)}
                         aria-label={`Đánh giá ${star} sao`}
                       >
-                        {active ? (
-                          <IoStar size={15} color="#f59e0b" />
-                        ) : (
-                          <IoStarOutline size={15} color="var(--yt-text-secondary)" />
-                        )}
+                        <Star
+                          size={14}
+                          strokeWidth={1.75}
+                          color={active ? '#ffd875' : '#989fb8'}
+                          fill={active ? '#ffd875' : 'none'}
+                        />
                       </button>
                     );
                   })}
                 </div>
-                <span style={{ fontSize: '12.5px', fontWeight: 700 }}>{avgStars}</span>
+                <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#ffd875' }}>{avgStars}</span>
                 {rating && rating.n > 0 && (
-                  <span style={{ fontSize: '11px', color: 'var(--yt-text-secondary)' }}>({rating.n})</span>
+                  <span style={{ fontSize: '11px', color: 'var(--yt-text-muted)' }}>({rating.n})</span>
                 )}
               </div>
 
-              <button
-                type="button"
-                onClick={() => onToggleSave(film.id)}
-                className={`watch-action-pill ${saved ? 'active' : ''}`}
-              >
-                {saved ? <IoBookmark size={17} color="#ff0033" /> : <IoBookmarkOutline size={17} />}
-                <span>{saved ? 'Đã lưu' : 'Xem sau'}</span>
-              </button>
+              <ToggleButton
+                size="md"
+                label={saved ? 'Đã lưu' : 'Xem sau'}
+                isPressed={saved}
+                onPressedChange={() => onToggleSave(film.id)}
+                icon={<Bookmark size={15} strokeWidth={1.75} />}
+                pressedIcon={<Bookmark size={15} strokeWidth={1.75} fill="#ffd875" color="#ffd875" />}
+              />
 
               {!isMobile && (
-                <button
-                  type="button"
-                  onClick={() => setWideMode(!wideMode)}
-                  className={`watch-action-pill ${wideMode ? 'active' : ''}`}
-                  title="Chế độ rạp chiếu (t)"
-                >
-                  <IoExpandOutline size={17} />
-                  <span>{wideMode ? 'Mặc định' : 'Rạp phim'}</span>
-                </button>
+                <ToggleButton
+                  size="md"
+                  label={wideMode ? 'Mặc định' : 'Rạp phim'}
+                  tooltip="Chế độ rạp chiếu (t)"
+                  isPressed={wideMode}
+                  onPressedChange={(pressed) => setWideMode(pressed)}
+                  icon={<Maximize2 size={15} strokeWidth={1.75} />}
+                />
               )}
 
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="md"
+                label={copiedToast ? 'Đã chép link!' : 'Chia sẻ'}
+                icon={<Share2 size={15} strokeWidth={1.75} />}
                 onClick={handleShare}
-                className="watch-action-pill"
-              >
-                <IoShareSocialOutline size={17} />
-                <span>{copiedToast ? 'Đã chép link!' : 'Chia sẻ'}</span>
-              </button>
+              />
             </div>
           </div>
 
           {/* Series Episodes Strip (when movie is multi-part or episodic) */}
           {(seriesEpisodes.length >= 2 || getEpisodeNumber(film) !== null) && (
-            <div
-              data-testid="series-episodes-strip"
-              style={{
-                marginTop: '14px',
-                padding: '12px 14px',
-                borderRadius: '12px',
-                backgroundColor: 'var(--yt-hover)',
-                border: '1px solid var(--yt-border)',
-              }}
-            >
+            <div className="phimai-series-panel" data-testid="series-episodes-strip">
               <div
                 style={{
                   display: 'flex',
@@ -625,53 +643,31 @@ export function WatchPage({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '13px', fontWeight: 700 }}>
+                  <span className="phimai-tabular" style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--color-text-primary)' }}>
                     Các phần cùng bộ ({Math.max(seriesEpisodes.length, 1)} tập)
                   </span>
                   {nextSeriesEpisode && (
-                    <span
-                      style={{
-                        fontSize: '11.5px',
-                        fontWeight: 600,
-                        color: 'var(--yt-blue)',
-                        backgroundColor: 'rgba(62, 166, 255, 0.14)',
-                        padding: '2px 8px',
-                        borderRadius: '999px',
-                      }}
-                    >
-                      Tự động phát tiếp: Tập {getEpisodeNumber(nextSeriesEpisode) ?? currentEpIdx + 2}
-                    </span>
+                    <Badge
+                      variant="yellow"
+                      label={`Tự động phát tiếp: Tập ${getEpisodeNumber(nextSeriesEpisode) ?? currentEpIdx + 2}`}
+                    />
                   )}
                   {discoverMsg && (
-                    <span style={{ fontSize: '11.5px', color: '#4ade80', fontWeight: 600 }}>
-                      {discoverMsg}
-                    </span>
+                    <Badge variant="success" label={discoverMsg} />
                   )}
                 </div>
-                <button
-                  type="button"
+
+                <Button
+                  variant="secondary"
+                  size="sm"
                   data-testid="discover-episodes-btn"
+                  isLoading={discoveringEps}
+                  icon={<RefreshCw size={13} strokeWidth={1.75} />}
+                  label={discoveringEps ? 'Đang tìm tập...' : 'Tìm thêm tập'}
                   onClick={handleDiscoverMoreEpisodes}
-                  disabled={discoveringEps}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    padding: '4px 10px',
-                    borderRadius: '14px',
-                    border: '1px solid var(--yt-border)',
-                    backgroundColor: 'var(--yt-background)',
-                    color: 'var(--yt-text-primary)',
-                    fontSize: '11.5px',
-                    fontWeight: 600,
-                    cursor: discoveringEps ? 'wait' : 'pointer',
-                    opacity: discoveringEps ? 0.7 : 1,
-                  }}
-                >
-                  <IoRefreshOutline size={13} />
-                  <span>{discoveringEps ? 'Đang tìm tập...' : 'Tìm thêm tập'}</span>
-                </button>
+                />
               </div>
+
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                 {(seriesEpisodes.length > 0 ? seriesEpisodes : [film]).map((ep, idx) => (
                   <button
@@ -682,7 +678,11 @@ export function WatchPage({
                     className={`phimai-ep-chip ${ep.id === film.id ? 'active' : ''}`}
                   >
                     <span>Tập {getEpisodeNumber(ep) ?? idx + 1}</span>
-                    {ep.dur && <span style={{ opacity: 0.72, fontSize: '11px' }}>({ep.dur})</span>}
+                    {ep.dur && (
+                      <span style={{ opacity: ep.id === film.id ? 0.85 : 0.72, fontSize: '11px' }}>
+                        ({ep.dur})
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -695,8 +695,8 @@ export function WatchPage({
             onClick={() => !expandedDesc && setExpandedDesc(true)}
             style={{ marginTop: '14px', cursor: expandedDesc ? 'default' : 'pointer' }}
           >
-            <div className="watch-description-stats">
-              <span>{formatViewsVN(film.views)}</span>
+            <div className="watch-description-stats phimai-tabular">
+              <span>{formatViewsVN(displayViews)}</span>
               {film.dur && <span>• {film.dur}</span>}
               <span>• {CAT_LABEL[film.cat] || film.cat}</span>
               {film.tool && <span>• {film.tool}</span>}
@@ -740,11 +740,11 @@ export function WatchPage({
                 setExpandedDesc((v) => !v);
               }}
               style={{
-                marginTop: '8px',
+                marginTop: '10px',
                 background: 'none',
                 border: 'none',
                 padding: 0,
-                color: 'var(--yt-text-primary)',
+                color: 'var(--color-accent, #ffd875)',
                 fontWeight: 700,
                 fontSize: '12.5px',
                 cursor: 'pointer',
@@ -756,101 +756,76 @@ export function WatchPage({
 
           {/* Timestamped Comments Section */}
           <div className="comments-section" style={{ marginTop: '24px' }}>
-            <h2 style={{ fontSize: '17px', fontWeight: 700, marginBottom: '14px' }}>
+            <Heading
+              level={2}
+              className="phimai-tabular"
+              weight="bold"
+              style={{
+                fontSize: '17px',
+                fontFamily: 'var(--font-family-body, "Be Vietnam Pro", sans-serif)',
+                marginBottom: '14px',
+              }}
+            >
               Bình luận ({comments.length})
-            </h2>
+            </Heading>
 
             <form
               onSubmit={handlePostComment}
               style={{
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '8px',
-                backgroundColor: 'var(--yt-hover)',
-                padding: '12px',
+                gap: '10px',
+                backgroundColor: 'var(--yt-surface, #161822)',
+                border: '1px solid var(--yt-border)',
+                padding: '14px',
                 borderRadius: '12px',
                 marginBottom: '18px',
               }}
             >
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                <input
-                  type="text"
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <TextInput
+                  label="Tên hiển thị"
+                  isLabelHidden
+                  size="md"
                   placeholder="Tên hiển thị"
                   value={commentName}
-                  onChange={(e) => setCommentName(e.target.value)}
-                  style={{
-                    flex: '0 1 180px',
-                    padding: '8px 10px',
-                    borderRadius: '8px',
-                    border: '1px solid var(--yt-border)',
-                    backgroundColor: 'var(--yt-background)',
-                    color: 'var(--yt-text-primary)',
-                    fontSize: '13px',
-                  }}
+                  onChange={(val) => setCommentName(val)}
+                  containerStyle={{ flex: '0 1 180px' }}
                 />
-                <input
-                  type="text"
+                <TextInput
+                  label="Nội dung bình luận"
+                  isLabelHidden
+                  size="md"
                   placeholder="Chia sẻ cảm nhận hoặc đánh dấu tình tiết hay..."
                   value={commentText}
-                  onChange={(e) => setCommentText(e.target.value)}
-                  style={{
-                    flex: '1 1 260px',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid var(--yt-border)',
-                    backgroundColor: 'var(--yt-background)',
-                    color: 'var(--yt-text-primary)',
-                    fontSize: '13px',
-                  }}
+                  onChange={(val) => setCommentText(val)}
+                  containerStyle={{ flex: '1 1 260px' }}
                 />
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-                <button
-                  type="button"
-                  onClick={() => setAttachTimestamp((v) => !v)}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    background: attachTimestamp ? 'rgba(62,166,255,0.16)' : 'transparent',
-                    color: attachTimestamp ? 'var(--yt-blue)' : 'var(--yt-text-secondary)',
-                    border: '1px solid var(--yt-border)',
-                    borderRadius: '999px',
-                    padding: '4px 10px',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <IoTimeOutline size={14} />
-                  <span>Gắn mốc giờ ({formatClock(currentTimeSec)})</span>
-                </button>
 
-                <button
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                <ToggleButton
+                  size="sm"
+                  label={`Gắn mốc giờ (${formatClock(currentTimeSec)})`}
+                  isPressed={attachTimestamp}
+                  onPressedChange={(pressed) => setAttachTimestamp(pressed)}
+                  icon={<Clock size={14} strokeWidth={1.75} />}
+                />
+
+                <Button
                   type="submit"
-                  disabled={!commentText.trim() || postingComment}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '6px 14px',
-                    borderRadius: '18px',
-                    border: 'none',
-                    backgroundColor: commentText.trim() ? 'var(--yt-blue)' : 'var(--yt-active)',
-                    color: commentText.trim() ? '#000' : 'var(--yt-text-secondary)',
-                    fontSize: '13px',
-                    fontWeight: 700,
-                    cursor: commentText.trim() ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  <IoSendOutline size={14} />
-                  <span>Gửi bình luận</span>
-                </button>
+                  variant="primary"
+                  size="sm"
+                  label="Gửi bình luận"
+                  isLoading={postingComment}
+                  isDisabled={!commentText.trim()}
+                  icon={<Send size={14} strokeWidth={1.75} />}
+                />
               </div>
             </form>
 
             {comments.length === 0 ? (
-              <div style={{ color: 'var(--yt-text-secondary)', fontSize: '13px' }}>
+              <div style={{ color: 'var(--yt-text-muted, #989fb8)', fontSize: '13.5px' }}>
                 Chưa có bình luận nào. Hãy là người đầu tiên chia sẻ cảm nhận!
               </div>
             ) : (
@@ -860,42 +835,31 @@ export function WatchPage({
                     key={c.id}
                     style={{
                       display: 'flex',
-                      gap: '10px',
+                      gap: '12px',
                       alignItems: 'flex-start',
-                      paddingBottom: '10px',
-                      borderBottom: '1px solid rgba(255,255,255,0.06)',
+                      paddingBottom: '12px',
+                      borderBottom: '1px solid var(--yt-border)',
                     }}
                   >
-                    <div
-                      style={{
-                        width: '34px',
-                        height: '34px',
-                        borderRadius: '50%',
-                        backgroundColor: 'var(--yt-hover)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontWeight: 700,
-                        fontSize: '13px',
-                        flexShrink: 0,
-                      }}
-                    >
-                      {(c.name || 'K').charAt(0).toUpperCase()}
-                    </div>
+                    <Avatar size={36} name={c.name || 'Khán giả'} tooltip={false} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '13px', fontWeight: 700 }}>{c.name}</span>
+                        <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                          {c.name}
+                        </span>
                         {c.s > 0 && (
                           <button
                             type="button"
                             onClick={() => onSeekToSec(c.s)}
+                            className="phimai-tabular"
                             style={{
-                              background: 'rgba(62,166,255,0.16)',
-                              color: 'var(--yt-blue)',
-                              border: 'none',
-                              borderRadius: '4px',
+                              fontFamily: 'var(--font-family-code, monospace)',
+                              background: 'rgba(255, 216, 117, 0.14)',
+                              border: '1px solid rgba(255, 216, 117, 0.28)',
+                              color: '#ffd875',
+                              borderRadius: '5px',
                               padding: '1px 6px',
-                              fontSize: '11.5px',
+                              fontSize: '11px',
                               fontWeight: 700,
                               cursor: 'pointer',
                             }}
@@ -904,10 +868,10 @@ export function WatchPage({
                           </button>
                         )}
                         {c.d && (
-                          <span style={{ fontSize: '11px', color: 'var(--yt-text-secondary)' }}>{c.d}</span>
+                          <span style={{ fontSize: '11.5px', color: 'var(--yt-text-muted, #989fb8)' }}>{c.d}</span>
                         )}
                       </div>
-                      <p style={{ margin: '4px 0 0', fontSize: '13.5px', lineHeight: 1.45, color: 'var(--yt-text-primary)' }}>
+                      <p style={{ margin: '4px 0 0', fontSize: '13.5px', lineHeight: 1.5, color: 'var(--yt-text-secondary)' }}>
                         {c.text}
                       </p>
                     </div>
@@ -918,11 +882,19 @@ export function WatchPage({
           </div>
         </div>
 
-        {/* Right Column: kv-tube Up-Next Related Panel */}
+        {/* Right Column: Up-Next Related Panel */}
         <aside className="watch-secondary" style={{ minWidth: 0 }}>
-          <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '10px' }}>
+          <Heading
+            level={2}
+            weight="bold"
+            style={{
+              fontSize: '15px',
+              fontFamily: 'var(--font-family-body, "Be Vietnam Pro", sans-serif)',
+              marginBottom: '10px',
+            }}
+          >
             Phim đề xuất tiếp theo
-          </div>
+          </Heading>
 
           <div ref={chipBarRef} className="yt-chip-bar" style={{ marginBottom: '12px' }}>
             {[

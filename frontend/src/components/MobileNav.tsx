@@ -1,16 +1,4 @@
-import React from 'react';
-import {
-  IoHome,
-  IoHomeOutline,
-  IoFlame,
-  IoFlameOutline,
-  IoBookmark,
-  IoBookmarkOutline,
-  IoTime,
-  IoTimeOutline,
-  IoTv,
-  IoTvOutline,
-} from 'react-icons/io5';
+import { Home, Tv, Flame, Bookmark, History } from 'lucide-react';
 
 interface MobileNavProps {
   activeView: 'home' | 'watch' | 'channels' | 'channel';
@@ -45,45 +33,44 @@ export function MobileNav({
       label: 'Trang chủ',
       active: isHome,
       onClick: onSelectHome,
-      icon: isHome ? <IoHome size={20} /> : <IoHomeOutline size={20} />,
+      icon: <Home size={19} strokeWidth={isHome ? 2.2 : 1.75} />,
     },
     {
       id: 'channels',
       label: 'Kênh',
       active: isChannels,
       onClick: onSelectChannels,
-      icon: isChannels ? <IoTv size={20} /> : <IoTvOutline size={20} />,
+      icon: <Tv size={19} strokeWidth={isChannels ? 2.2 : 1.75} />,
     },
     {
       id: 'hot',
       label: 'Thịnh hành',
       active: isHot,
       onClick: onSelectHot,
-      icon: isHot ? <IoFlame size={20} /> : <IoFlameOutline size={20} />,
+      icon: <Flame size={19} strokeWidth={isHot ? 2.2 : 1.75} />,
     },
     {
       id: 'saved',
       label: 'Đã lưu',
       active: isSaved,
       onClick: onSelectSaved,
-      icon: isSaved ? <IoBookmark size={20} /> : <IoBookmarkOutline size={20} />,
+      icon: <Bookmark size={19} strokeWidth={isSaved ? 2.2 : 1.75} />,
     },
     {
       id: 'history',
       label: 'Lịch sử',
       active: isHistory,
       onClick: onSelectHistory,
-      icon: isHistory ? <IoTime size={20} /> : <IoTimeOutline size={20} />,
+      icon: <History size={19} strokeWidth={isHistory ? 2.2 : 1.75} />,
     },
   ];
 
   return (
     <nav
       className="mobile-nav"
+      aria-label="Điều hướng di động"
       style={{
-        backgroundColor: 'var(--yt-background, #0f0f0f)',
-        borderTop: '1px solid var(--yt-border, rgba(255,255,255,0.12))',
-        height: 'calc(52px + env(safe-area-inset-bottom, 0px))',
+        height: 'calc(54px + env(safe-area-inset-bottom, 0px))',
         paddingBottom: 'env(safe-area-inset-bottom, 0px)',
         zIndex: 999,
         alignItems: 'center',
@@ -95,22 +82,25 @@ export function MobileNav({
           key={tab.id}
           type="button"
           onClick={tab.onClick}
+          aria-current={tab.active ? 'page' : undefined}
           style={{
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
             flex: 1,
-            height: '52px',
+            height: '54px',
+            minHeight: '46px',
             border: 'none',
             background: 'transparent',
-            color: tab.active ? 'var(--yt-text-primary, #f1f1f1)' : 'var(--yt-text-secondary, #aaaaaa)',
+            color: tab.active ? 'var(--color-accent, #ffd875)' : 'var(--color-text-secondary, #c4c8d9)',
             cursor: 'pointer',
-            gap: '2px',
+            gap: '3px',
+            transition: 'color 0.15s ease',
           }}
         >
           {tab.icon}
-          <span style={{ fontSize: '10px', fontWeight: tab.active ? 600 : 400 }}>{tab.label}</span>
+          <span style={{ fontSize: '10.5px', fontWeight: tab.active ? 700 : 500 }}>{tab.label}</span>
         </button>
       ))}
     </nav>

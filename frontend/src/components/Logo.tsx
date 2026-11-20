@@ -1,4 +1,4 @@
-import React, { useId } from 'react';
+import { useId } from 'react';
 
 interface LogoProps {
   size?: number;
@@ -23,7 +23,7 @@ export function Logo({
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: '8px',
+        gap: '9px',
         userSelect: 'none',
         lineHeight: 1,
       }}
@@ -41,8 +41,8 @@ export function Logo({
         <defs>
           <linearGradient id={gradId} x1="48" y1="32" x2="464" y2="480" gradientUnits="userSpaceOnUse">
             <stop offset="0%" stopColor="#FF244C" />
-            <stop offset="52%" stopColor="#FF0033" />
-            <stop offset="100%" stopColor="#B00022" />
+            <stop offset="52%" stopColor="#E50914" />
+            <stop offset="100%" stopColor="#9E0610" />
           </linearGradient>
           <linearGradient id={sheenId} x1="0" y1="0" x2="0" y2="512" gradientUnits="userSpaceOnUse">
             <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.22" />
@@ -58,7 +58,7 @@ export function Logo({
         />
         <path
           d="M376 92L386 124L418 134L386 144L376 176L366 144L334 134L366 124L376 92Z"
-          fill="#FFF5CC"
+          fill="#FFD875"
         />
         <path
           d="M418 168L422.5 182L436.5 186.5L422.5 191L418 205L413.5 191L399.5 186.5L413.5 182L418 168Z"
@@ -68,29 +68,34 @@ export function Logo({
       </svg>
 
       {showText && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
           <span
             style={{
               fontSize: Math.round(size * 0.68),
               fontWeight: 800,
-              letterSpacing: '-0.5px',
-              fontFamily: '"Be Vietnam Pro", Roboto, sans-serif',
+              letterSpacing: '-0.03em',
+              fontFamily: 'var(--font-family-body, "Be Vietnam Pro", sans-serif)',
               display: 'inline-flex',
               alignItems: 'center',
             }}
           >
-            <span style={{ color: '#FF0033' }}>Phim</span>
-            <span style={{ color: 'var(--yt-text-primary, #f1f1f1)' }}>AI</span>
+            <span style={{ color: '#e50914' }}>Phim</span>
+            <span style={{ color: 'var(--color-text-primary, #f4f4f6)' }}>AI</span>
           </span>
           {showQualityBadge && (
             <span
+              className="phimai-tabular"
               style={{
+                fontFamily: 'var(--font-family-code, "JetBrains Mono", monospace)',
                 fontSize: '9.5px',
                 fontWeight: 700,
-                color: 'var(--yt-text-secondary, #aaaaaa)',
-                alignSelf: 'flex-start',
-                marginTop: '1px',
-                letterSpacing: '0.2px',
+                color: 'var(--color-accent, #ffd875)',
+                backgroundColor: 'rgba(255, 216, 117, 0.12)',
+                border: '1px solid rgba(255, 216, 117, 0.28)',
+                borderRadius: '4px',
+                padding: '2px 5px',
+                lineHeight: 1,
+                letterSpacing: '0.04em',
               }}
             >
               4K

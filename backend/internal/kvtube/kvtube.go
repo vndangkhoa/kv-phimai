@@ -252,13 +252,70 @@ func (s *Service) doRequest(req *http.Request, isStream bool, bodyPayload []byte
 			return nil, wErr
 		}
 	}
+	if !warpAvailable && (req.Method == http.MethodGet || req.Method == http.MethodHead) &&
+		(err != nil || (resp != nil && (resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusServiceUnavailable))) {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		select {
+		case <-time.After(150 * time.Millisecond):
+			rRetry, _ := buildClone()
+			return directClient.Do(rRetry)
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		}
+	}
 	return resp, err
+}
+
+func stripKeepAliveParam(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+	parts := strings.Split(rawQuery, "&")
+	kept := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		lower := strings.ToLower(p)
+		if lower == "keepalive" || strings.HasPrefix(lower, "keepalive=") {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return strings.Join(kept, "&")
+}
+
+func stripKeepAliveFromURL(rawURL string) string {
+	idx := strings.IndexByte(rawURL, '?')
+	if idx < 0 {
+		return rawURL
+	}
+	cleaned := stripKeepAliveParam(rawURL[idx+1:])
+	if cleaned == "" {
+		return rawURL[:idx]
+	}
+	return rawURL[:idx] + "?" + cleaned
+}
+
+func maybeStripKeepAlive(u string) string {
+	// Removing keepalive=yes prevents Invidious Companion range requests from stalling on long videos;
+	// keepalive is never part of YouTube's signed sparams.
+	if strings.Contains(u, "videoplayback") || strings.Contains(u, "companion") {
+		return stripKeepAliveFromURL(u)
+	}
+	return u
 }
 
 // RewriteStreamURLToSameOrigin normalizes all Invidious, Companion, yt.khoavo.vndns.net,
 // u.khoavo.vndns.net, and IP-bound *.googlevideo.com URLs into same-origin /api/invidious/...
 // paths so zero external KV-Tube or googlevideo origins are exposed to the client.
 func (s *Service) RewriteStreamURLToSameOrigin(raw string) string {
+	return maybeStripKeepAlive(s.rewriteStreamURLToSameOrigin(raw))
+}
+
+func (s *Service) rewriteStreamURLToSameOrigin(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return ""
@@ -370,6 +427,9 @@ func (s *Service) buildUpstreamTarget(subPath string, rawQuery string) string {
 		target = s.UpstreamRoot + cleanSub
 	}
 
+	if strings.Contains(cleanSub, "videoplayback") || strings.Contains(cleanSub, "companion") {
+		rawQuery = stripKeepAliveParam(rawQuery)
+	}
 	if rawQuery != "" {
 		target += "?" + rawQuery
 	}
@@ -454,16 +514,16 @@ func (s *Service) rewriteMPDManifest(xmlBytes []byte) []byte {
 	text = reMPDBaseURL.ReplaceAllStringFunc(text, func(match string) string {
 		inner := strings.TrimSuffix(strings.TrimPrefix(match, "<BaseURL>"), "</BaseURL>")
 		trimmed := strings.TrimSpace(inner)
-		if strings.HasPrefix(trimmed, "/companion/") || trimmed == "/companion" {
-			trimmed = "/api/invidious" + trimmed
-		} else if strings.HasPrefix(trimmed, "/videoplayback") {
-			trimmed = "/api/invidious/companion" + trimmed
-		} else if strings.HasPrefix(trimmed, "https://") {
-			unescaped := strings.ReplaceAll(trimmed, "&amp;", "&")
-			rewritten := s.RewriteStreamURLToSameOrigin(unescaped)
-			trimmed = strings.ReplaceAll(rewritten, "&", "&amp;")
+		unescaped := strings.ReplaceAll(trimmed, "&amp;", "&")
+		var normalized string
+		if strings.HasPrefix(unescaped, "http://") || strings.HasPrefix(unescaped, "https://") ||
+			strings.HasPrefix(unescaped, "/") {
+			normalized = s.RewriteStreamURLToSameOrigin(unescaped)
+		} else {
+			normalized = stripKeepAliveFromURL(unescaped)
 		}
-		return "<BaseURL>" + trimmed + "</BaseURL>"
+		reEscaped := strings.ReplaceAll(normalized, "&", "&amp;")
+		return "<BaseURL>" + reEscaped + "</BaseURL>"
 	})
 	return []byte(text)
 }
@@ -1288,15 +1348,16 @@ func (s *Service) ProxyThumb(w http.ResponseWriter, r *http.Request, videoID str
 	s.mu.RUnlock()
 
 	candidates := []string{
-		fmt.Sprintf("%s/vi/%s/hqdefault.jpg", s.UpstreamRoot, url.PathEscape(videoID)),
-		fmt.Sprintf("%s/vi/%s/maxresdefault.jpg", s.UpstreamRoot, url.PathEscape(videoID)),
-		fmt.Sprintf("%s/vi/%s/mqdefault.jpg", s.UpstreamRoot, url.PathEscape(videoID)),
 		fmt.Sprintf("https://i.ytimg.com/vi/%s/hqdefault.jpg", url.PathEscape(videoID)),
+		fmt.Sprintf("https://i.ytimg.com/vi/%s/mqdefault.jpg", url.PathEscape(videoID)),
+	}
+	if s.UpstreamRoot != "" {
+		candidates = append(candidates, fmt.Sprintf("%s/vi/%s/hqdefault.jpg", s.UpstreamRoot, url.PathEscape(videoID)))
 	}
 
 	seen404 := 0
 	for _, target := range candidates {
-		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			cancel()

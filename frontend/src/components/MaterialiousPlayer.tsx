@@ -63,6 +63,153 @@ function qualityStreamUrl(q: QualityOption, videoId: string): string {
   return `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=${encodeURIComponent(itag)}&local=true`;
 }
 
+/** Normalize portrait vs landscape resolution tier (short side on portrait videos). */
+function normalizeVideoTier(width?: number, height?: number): number {
+  const vw = width || 0;
+  const vh = height || 0;
+  if (vw > 0 && vh > 0) {
+    return vh > vw ? vw : vh;
+  }
+  return vh || vw || 720;
+}
+
+/** Pre-stage a direct stream (and optional separate audio) off-screen before swapping the live player. */
+function probeDirectStreamReady(
+  videoUrl: string,
+  audioUrl: string | null,
+  seekSec: number,
+  timeoutMs = 6500
+): { promise: Promise<boolean>; cancel: () => void } {
+  let done = false;
+  let cleanupFn = () => {};
+
+  const promise = new Promise<boolean>((resolve) => {
+    const stageVid = document.createElement('video');
+    stageVid.muted = true;
+    stageVid.playsInline = true;
+    stageVid.preload = 'auto';
+
+    const stageAud = audioUrl ? document.createElement('audio') : null;
+    if (stageAud) {
+      stageAud.muted = true;
+      stageAud.preload = 'auto';
+    }
+
+    let vidSeekApplied = seekSec <= 0.5;
+    let audSeekApplied = !stageAud || seekSec <= 0.5;
+
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      cleanupFn();
+      resolve(ok);
+    };
+
+    const checkReady = () => {
+      if (done) return;
+      const vidOk =
+        vidSeekApplied &&
+        stageVid.readyState >= 2 &&
+        stageVid.videoWidth > 0 &&
+        !stageVid.seeking;
+      const audOk =
+        !stageAud || (audSeekApplied && stageAud.readyState >= 2 && !stageAud.seeking);
+      if (vidOk && audOk) {
+        finish(true);
+      }
+    };
+
+    const applySeek = (el: HTMLMediaElement) => {
+      if (seekSec <= 0.5) return;
+      try {
+        const dur = Number.isFinite(el.duration) && el.duration > 1 ? el.duration : 0;
+        const target = dur > 0 ? Math.min(seekSec, dur - 1) : seekSec;
+        if (Math.abs(el.currentTime - target) > 0.25) {
+          el.currentTime = target;
+        }
+      } catch {
+        // ignore seek errors before metadata stabilizes
+      }
+    };
+
+    const onVidMeta = () => {
+      vidSeekApplied = true;
+      applySeek(stageVid);
+      checkReady();
+    };
+    const onAudMeta = () => {
+      if (!stageAud) return;
+      audSeekApplied = true;
+      applySeek(stageAud);
+      checkReady();
+    };
+    const onErr = () => finish(false);
+
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
+    stageVid.addEventListener('loadedmetadata', onVidMeta);
+    stageVid.addEventListener('loadeddata', checkReady);
+    stageVid.addEventListener('canplay', checkReady);
+    stageVid.addEventListener('seeked', checkReady);
+    stageVid.addEventListener('error', onErr);
+
+    if (stageAud) {
+      stageAud.addEventListener('loadedmetadata', onAudMeta);
+      stageAud.addEventListener('loadeddata', checkReady);
+      stageAud.addEventListener('canplay', checkReady);
+      stageAud.addEventListener('seeked', checkReady);
+      stageAud.addEventListener('error', onErr);
+    }
+
+    cleanupFn = () => {
+      clearTimeout(timer);
+      stageVid.removeEventListener('loadedmetadata', onVidMeta);
+      stageVid.removeEventListener('loadeddata', checkReady);
+      stageVid.removeEventListener('canplay', checkReady);
+      stageVid.removeEventListener('seeked', checkReady);
+      stageVid.removeEventListener('error', onErr);
+      try {
+        stageVid.pause();
+        stageVid.removeAttribute('src');
+        stageVid.load();
+      } catch {
+        // ignore
+      }
+      if (stageAud) {
+        stageAud.removeEventListener('loadedmetadata', onAudMeta);
+        stageAud.removeEventListener('loadeddata', checkReady);
+        stageAud.removeEventListener('canplay', checkReady);
+        stageAud.removeEventListener('seeked', checkReady);
+        stageAud.removeEventListener('error', onErr);
+        try {
+          stageAud.pause();
+          stageAud.removeAttribute('src');
+          stageAud.load();
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    stageVid.src = videoUrl;
+    stageVid.load();
+    if (stageAud && audioUrl) {
+      stageAud.src = audioUrl;
+      stageAud.load();
+    }
+  });
+
+  return {
+    promise,
+    cancel: () => {
+      if (!done) {
+        done = true;
+        cleanupFn();
+      }
+    },
+  };
+}
+
 /** Seconds of media buffered ahead of the playhead. */
 function bufferedAhead(vid: HTMLVideoElement): number {
   const cur = vid.currentTime;
@@ -110,10 +257,19 @@ export function MaterialiousPlayer({
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const freezeCanvasRef = useRef<HTMLCanvasElement>(null);
   const shakaPlayerRef = useRef<any>(null);
   const videoDataRef = useRef<VideoStreamPayload | null>(null);
   const usingProgressiveRef = useRef(false);
   const playbackStartedRef = useRef(false);
+  const isSwitchingQualityRef = useRef(false);
+  const switchNonceRef = useRef(0);
+  const activeQualityRef = useRef<QualityOption | null>(null);
+  const activeAudioUrlRef = useRef<string>('');
+  const failedDirectIdsRef = useRef<Set<string>>(new Set());
+  const stagingCleanupRef = useRef<(() => void) | null>(null);
+  const switchListenersCleanupRef = useRef<(() => void) | null>(null);
+  const lastShakaTierRef = useRef<number>(0);
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTapRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
   const stallTimestampsRef = useRef<number[]>([]);
@@ -148,6 +304,7 @@ export function MaterialiousPlayer({
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isBuffering, setIsBuffering] = useState(true);
+  const [isSwitchingQuality, setIsSwitchingQuality] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCssFullscreen, setIsCssFullscreen] = useState(false);
@@ -156,6 +313,7 @@ export function MaterialiousPlayer({
   const [scrubTime, setScrubTime] = useState<number | null>(null);
   const [scrubPercent, setScrubPercent] = useState<number>(0);
   const [previewHasFrame, setPreviewHasFrame] = useState(false);
+  const [previewEnabled, setPreviewEnabled] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [isLooping, setIsLooping] = useState(false);
 
@@ -167,6 +325,22 @@ export function MaterialiousPlayer({
   const [qualityMode, setQualityMode] = useState<'auto' | 'manual'>('auto');
   const [selectedHeight, setSelectedHeight] = useState<number>(0);
   const [activeHeight, setActiveHeight] = useState<number>(1080);
+
+  // Refs synced on render so async quality switch transitions never capture stale values
+  const autoplayRef = useRef(autoplay);
+  autoplayRef.current = autoplay;
+  const isMutedRef = useRef(isMuted);
+  isMutedRef.current = isMuted;
+  const volumeRef = useRef(volume);
+  volumeRef.current = volume;
+  const playbackRateRef = useRef(playbackRate);
+  playbackRateRef.current = playbackRate;
+  const needsSeparateAudioRef = useRef(needsSeparateAudio);
+  needsSeparateAudioRef.current = needsSeparateAudio;
+  const qualitiesRef = useRef(qualities);
+  qualitiesRef.current = qualities;
+  const qualityModeRef = useRef(qualityMode);
+  qualityModeRef.current = qualityMode;
   const [estimatedMbps, setEstimatedMbps] = useState<number>(() =>
     Math.round(bandwidthMonitor.getEstimatedMbps() * 10) / 10
   );
@@ -222,106 +396,344 @@ export function MaterialiousPlayer({
     [initialTimeSec]
   );
 
+  const captureFreezeFrame = useCallback(() => {
+    const curVid = videoRef.current;
+    const canvas = freezeCanvasRef.current;
+    if (!curVid || !canvas || curVid.videoWidth <= 0 || curVid.videoHeight <= 0) return false;
+    try {
+      canvas.width = curVid.videoWidth;
+      canvas.height = curVid.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return false;
+      ctx.drawImage(curVid, 0, 0, canvas.width, canvas.height);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   // Direct stream attachment helper (handles both muxed MP4 and high-res video + separate audio)
+  // Supports off-screen staging + frozen-frame canvas overlay + per-switch rollback on error/stall.
   const attachDirectQuality = useCallback(
-    (q: QualityOption, resumeAtSec?: number, dataOverride?: VideoStreamPayload | null) => {
+    async (
+      q: QualityOption,
+      resumeAtSec?: number,
+      dataOverride?: VideoStreamPayload | null,
+      opts?: { seamless?: boolean; isRollback?: boolean }
+    ): Promise<boolean> => {
       const vid = videoRef.current;
       const aud = audioRef.current;
       const vData = dataOverride || videoDataRef.current;
-      if (!vid || !vData) return;
+      if (!vid || !vData) return false;
 
-      const targetTime = resumeAtSec !== undefined ? resumeAtSec : vid.currentTime || 0;
+      const myNonce = ++switchNonceRef.current;
+      stagingCleanupRef.current?.();
+      stagingCleanupRef.current = null;
+      switchListenersCleanupRef.current?.();
+      switchListenersCleanupRef.current = null;
+      clearStartupWatchdog();
+
       const audioUrl = vData.bestAudioUrl
         ? proxySameOriginUrl(vData.bestAudioUrl)
         : `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=140&local=true`;
-
       const streamSrc = qualityStreamUrl(q, videoId);
+
+      const isMidPlaybackSwitch = Boolean(
+        opts?.seamless && playbackStartedRef.current && vid.videoWidth > 0 && !opts?.isRollback
+      );
+      const reuseAudio =
+        !q.hasAudio &&
+        needsSeparateAudioRef.current &&
+        activeAudioUrlRef.current === audioUrl &&
+        Boolean(aud && aud.readyState >= 2);
+
+      // 1. Pre-stage high-res / candidate streams off-screen while live playback continues uninterrupted
+      if (isMidPlaybackSwitch) {
+        const staging = probeDirectStreamReady(
+          streamSrc,
+          !q.hasAudio && !reuseAudio ? audioUrl : null,
+          vid.currentTime,
+          10000
+        );
+        stagingCleanupRef.current = staging.cancel;
+        const stagedOk = await staging.promise;
+        if (stagingCleanupRef.current === staging.cancel) {
+          stagingCleanupRef.current = null;
+        }
+        if (switchNonceRef.current !== myNonce) {
+          return false;
+        }
+        if (!stagedOk) {
+          failedDirectIdsRef.current.add(q.id);
+          failedDirectIdsRef.current.add(String(q.height));
+          return false;
+        }
+      }
+
+      const curVid = videoRef.current;
+      const curAud = audioRef.current;
+      if (!curVid || switchNonceRef.current !== myNonce) return false;
+
+      const prevQuality = activeQualityRef.current;
+      const wasPlaying = isMidPlaybackSwitch ? (!curVid.paused || isSwitchingQualityRef.current) : autoplayRef.current;
+      const swapTime = isMidPlaybackSwitch
+        ? curVid.currentTime || 0
+        : resumeAtSec !== undefined
+          ? resumeAtSec
+          : curVid.currentTime || 0;
+
+      // 2. Snapshot current video frame so there is zero black screen during load/seek
+      if (isMidPlaybackSwitch) {
+        captureFreezeFrame();
+        isSwitchingQualityRef.current = true;
+        setIsSwitchingQuality(true);
+      } else {
+        setIsBuffering(true);
+      }
+
+      // If transitioning out of Shaka DASH into direct playback, tear down Shaka only after staging succeeded
+      if (shakaPlayerRef.current) {
+        const oldShaka = shakaPlayerRef.current;
+        shakaPlayerRef.current = null;
+        await oldShaka.destroy().catch(() => {});
+        if (switchNonceRef.current !== myNonce) {
+          isSwitchingQualityRef.current = false;
+          setIsSwitchingQuality(false);
+          setIsBuffering(false);
+          return false;
+        }
+      }
 
       lastQualitySwitchRef.current = Date.now();
       usingProgressiveRef.current = true;
       setActiveHeight(q.height || 360);
-      setIsBuffering(true);
       setErrorMsg(null);
 
-      if (!q.hasAudio && audioUrl) {
+      const needsAudio = Boolean(!q.hasAudio && audioUrl);
+      if (needsAudio) {
+        needsSeparateAudioRef.current = true;
         setNeedsSeparateAudio(true);
         setBestAudioUrl(audioUrl);
-        vid.muted = true;
-        if (aud) {
-          aud.src = audioUrl;
-          aud.volume = isMuted ? 0 : volume;
-          aud.muted = isMuted;
-          aud.playbackRate = playbackRate;
-          aud.load();
-          if (targetTime > 0) {
-            aud.currentTime = targetTime;
+        curVid.muted = true;
+        if (curAud) {
+          if (reuseAudio) {
+            if (!curAud.paused) curAud.pause();
+          } else {
+            activeAudioUrlRef.current = audioUrl;
+            curAud.src = audioUrl;
+            curAud.volume = isMutedRef.current ? 0 : volumeRef.current;
+            curAud.muted = isMutedRef.current;
+            curAud.playbackRate = playbackRateRef.current;
+            curAud.load();
           }
         }
       } else {
+        needsSeparateAudioRef.current = false;
         setNeedsSeparateAudio(false);
-        vid.muted = isMuted;
-        vid.volume = volume;
-        if (aud) {
-          aud.pause();
-          aud.removeAttribute('src');
-          aud.load();
+        activeAudioUrlRef.current = '';
+        curVid.muted = isMutedRef.current;
+        curVid.volume = volumeRef.current;
+        if (curAud) {
+          curAud.pause();
+          curAud.removeAttribute('src');
+          curAud.load();
         }
       }
 
-      vid.src = streamSrc;
-      vid.playbackRate = playbackRate;
-      vid.load();
-      if (targetTime > 0) {
-        try {
-          vid.currentTime = targetTime;
-        } catch {
-          // will apply on loadedmetadata / canplay
-        }
-      }
-      if (autoplay) {
-        vid.play().catch(() => {});
-        if (!q.hasAudio && aud && audioUrl) {
-          aud.play().catch(() => {});
-        }
-      }
+      return await new Promise<boolean>((resolve) => {
+        let settled = false;
+        let resumeStarted = false;
+        let vidSeekApplied = swapTime <= 0.25;
+        let audSeekApplied = !needsAudio || !curAud || reuseAudio || swapTime <= 0.25;
+        let revealTimer: ReturnType<typeof setTimeout> | null = null;
+        let rvfcId: number | null = null;
 
-      // Guardrail: if high-res or adaptive direct stream fails to decode frames within 4.5s,
-      // automatically step down to resilient muxed MP4 progressive stream so playback never stalls.
-      clearStartupWatchdog();
-      if (!streamSrc.includes('itag=18')) {
-        startupWatchdogRef.current = setTimeout(() => {
-          const curVid = videoRef.current;
-          if (!curVid || playbackStartedRef.current || curVid.readyState >= 2) return;
-          const muxed =
-            vData.streams?.find((s) => s.url) ||
-            qualities.find((opt) => opt.hasAudio && opt.itag === '18');
-          const fallbackUrl =
-            muxed?.url && !muxed.url.includes(streamSrc)
-              ? proxySameOriginUrl(muxed.url)
-              : `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`;
-          console.warn('[PhimAI Player] Startup watchdog stepping down to muxed stream:', fallbackUrl);
-          setNeedsSeparateAudio(false);
-          setActiveHeight(360);
-          if (audioRef.current) {
-            audioRef.current.pause();
-            audioRef.current.removeAttribute('src');
+        const detachListeners = () => {
+          if (revealTimer) {
+            clearTimeout(revealTimer);
+            revealTimer = null;
           }
-          curVid.muted = isMuted;
-          curVid.volume = volume;
-          curVid.src = fallbackUrl;
-          curVid.load();
-          if (targetTime > 0) {
+          if (rvfcId !== null && typeof (curVid as any).cancelVideoFrameCallback === 'function') {
             try {
-              curVid.currentTime = targetTime;
+              (curVid as any).cancelVideoFrameCallback(rvfcId);
+            } catch {
+              // ignore
+            }
+            rvfcId = null;
+          }
+          curVid.removeEventListener('loadedmetadata', onVidMeta);
+          curVid.removeEventListener('loadeddata', tryResumeAndReveal);
+          curVid.removeEventListener('canplay', tryResumeAndReveal);
+          curVid.removeEventListener('seeked', tryResumeAndReveal);
+          curVid.removeEventListener('error', onTransitionError);
+          if (curAud) {
+            curAud.removeEventListener('loadedmetadata', onAudMeta);
+            curAud.removeEventListener('loadeddata', tryResumeAndReveal);
+            curAud.removeEventListener('canplay', tryResumeAndReveal);
+            curAud.removeEventListener('seeked', tryResumeAndReveal);
+            curAud.removeEventListener('error', onTransitionError);
+          }
+        };
+
+        const finishTransition = (ok: boolean) => {
+          if (settled) return;
+          settled = true;
+          detachListeners();
+          if (switchListenersCleanupRef.current === abortListenerCleanup) {
+            switchListenersCleanupRef.current = null;
+          }
+          clearStartupWatchdog();
+          if (switchNonceRef.current === myNonce) {
+            if (ok) {
+              activeQualityRef.current = q;
+              setDataLoaded(true);
+            }
+            isSwitchingQualityRef.current = false;
+            setIsSwitchingQuality(false);
+            setIsBuffering(false);
+          }
+          resolve(ok);
+        };
+
+        const abortListenerCleanup = () => {
+          finishTransition(false);
+        };
+        switchListenersCleanupRef.current = abortListenerCleanup;
+
+        const triggerRollback = (reason: string) => {
+          if (settled || switchNonceRef.current !== myNonce) return;
+          console.warn(`[PhimAI Player] Direct stream switch to ${q.height}p failed (${reason}); rolling back.`);
+          failedDirectIdsRef.current.add(q.id);
+          failedDirectIdsRef.current.add(String(q.height));
+          finishTransition(false);
+
+          if (opts?.isRollback) {
+            if (!playbackStartedRef.current) {
+              setIsBuffering(false);
+              setErrorMsg('Luồng video gặp gián đoạn, vui lòng thử lại.');
+            }
+            return;
+          }
+
+          const vStreamFallback = vData.streams?.find((s) => s.url);
+          const listMuxedFallback = qualitiesRef.current.find((opt) => opt.hasAudio && opt.id !== q.id);
+          const default360: QualityOption = {
+            id: '18',
+            label: '360p',
+            height: 360,
+            itag: '18',
+            url: vStreamFallback?.url
+              ? proxySameOriginUrl(vStreamFallback.url)
+              : `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`,
+            hasAudio: true,
+          };
+
+          const fallbackTarget =
+            prevQuality && prevQuality.id !== q.id && !failedDirectIdsRef.current.has(prevQuality.id)
+              ? prevQuality
+              : listMuxedFallback || default360;
+
+          if (qualityStreamUrl(fallbackTarget, videoId) === streamSrc && fallbackTarget.id === q.id) {
+            if (!playbackStartedRef.current) {
+              setIsBuffering(false);
+              setErrorMsg('Luồng video gặp gián đoạn, vui lòng thử lại.');
+            }
+            return;
+          }
+
+          setActiveHeight(fallbackTarget.height || 360);
+          if (qualityModeRef.current === 'manual') {
+            setSelectedHeight(prevQuality ? prevQuality.height : 0);
+          }
+          void attachDirectQuality(fallbackTarget, swapTime, vData, { isRollback: true });
+        };
+
+        const seekMediaSafe = (el: HTMLMediaElement) => {
+          if (swapTime <= 0.25) return;
+          try {
+            const dur = Number.isFinite(el.duration) && el.duration > 1 ? el.duration : 0;
+            const target = dur > 0 ? Math.min(swapTime, dur - 1) : swapTime;
+            if (Math.abs(el.currentTime - target) > 0.25) {
+              el.currentTime = target;
+            }
+          } catch {
+            // ignore
+          }
+        };
+
+        const onVidMeta = () => {
+          if (settled || switchNonceRef.current !== myNonce) return;
+          vidSeekApplied = true;
+          seekMediaSafe(curVid);
+          tryResumeAndReveal();
+        };
+
+        const onAudMeta = () => {
+          if (settled || switchNonceRef.current !== myNonce || !curAud) return;
+          audSeekApplied = true;
+          seekMediaSafe(curAud);
+          tryResumeAndReveal();
+        };
+
+        const onTransitionError = () => {
+          triggerRollback('media error');
+        };
+
+        const tryResumeAndReveal = () => {
+          if (settled || resumeStarted || switchNonceRef.current !== myNonce) return;
+          const vidReady = vidSeekApplied && curVid.readyState >= 2 && curVid.videoWidth > 0 && !curVid.seeking;
+          const audReady =
+            !needsAudio || !curAud || (audSeekApplied && curAud.readyState >= 2 && !curAud.seeking);
+          if (!vidReady || !audReady) return;
+
+          resumeStarted = true;
+          if (needsAudio && curAud && Math.abs(curAud.currentTime - curVid.currentTime) > 0.15) {
+            try {
+              curAud.currentTime = curVid.currentTime;
             } catch {
               // ignore
             }
           }
-          if (autoplay) curVid.play().catch(() => {});
-        }, 4500);
-      }
+
+          if (wasPlaying) {
+            curVid.play().catch(() => {});
+            if (needsAudio && curAud) curAud.play().catch(() => {});
+            // Reveal live <video> as soon as its first frame paints (or after 300ms max) to avoid black flash
+            if (typeof (curVid as any).requestVideoFrameCallback === 'function') {
+              rvfcId = (curVid as any).requestVideoFrameCallback(() => finishTransition(true));
+            }
+            revealTimer = setTimeout(() => finishTransition(true), 300);
+          } else {
+            revealTimer = setTimeout(() => finishTransition(true), 80);
+          }
+        };
+
+        curVid.addEventListener('loadedmetadata', onVidMeta);
+        curVid.addEventListener('loadeddata', tryResumeAndReveal);
+        curVid.addEventListener('canplay', tryResumeAndReveal);
+        curVid.addEventListener('seeked', tryResumeAndReveal);
+        curVid.addEventListener('error', onTransitionError);
+        if (needsAudio && curAud && !reuseAudio) {
+          curAud.addEventListener('loadedmetadata', onAudMeta);
+          curAud.addEventListener('loadeddata', tryResumeAndReveal);
+          curAud.addEventListener('canplay', tryResumeAndReveal);
+          curAud.addEventListener('seeked', tryResumeAndReveal);
+          curAud.addEventListener('error', onTransitionError);
+        }
+
+        curVid.src = streamSrc;
+        curVid.playbackRate = playbackRateRef.current;
+        curVid.load();
+
+        // Guardrail on every direct transition: if frames don't decode/resume within 6s, roll back.
+        startupWatchdogRef.current = setTimeout(() => {
+          if (!settled && switchNonceRef.current === myNonce) {
+            triggerRollback('timeout 6s');
+          }
+        }, 6000);
+      });
     },
-    [videoId, autoplay, isMuted, volume, playbackRate, clearStartupWatchdog, qualities]
+    [videoId, captureFreezeFrame, clearStartupWatchdog]
   );
 
   // Main stream loader when videoId changes
@@ -339,6 +751,17 @@ export function MaterialiousPlayer({
 
     usingProgressiveRef.current = false;
     playbackStartedRef.current = false;
+    isSwitchingQualityRef.current = false;
+    setIsSwitchingQuality(false);
+    switchNonceRef.current += 1;
+    stagingCleanupRef.current?.();
+    stagingCleanupRef.current = null;
+    switchListenersCleanupRef.current?.();
+    switchListenersCleanupRef.current = null;
+    activeQualityRef.current = null;
+    activeAudioUrlRef.current = '';
+    failedDirectIdsRef.current.clear();
+    lastShakaTierRef.current = 0;
     stallTimestampsRef.current = [];
     setDataLoaded(false);
     setErrorMsg(null);
@@ -346,6 +769,7 @@ export function MaterialiousPlayer({
     setQualityMode('auto');
     setSelectedHeight(0);
     setPreviewHasFrame(false);
+    setPreviewEnabled(false);
     setScrubTime(null);
     setIsScrubbing(false);
     lastProbeAtRef.current = 0;
@@ -450,83 +874,97 @@ export function MaterialiousPlayer({
                 }
               });
 
-              // Start Shaka's ABR from the measured (persisted) bandwidth; it then adapts up/down per segment.
-              const estBps = Math.max(1_500_000, Math.round(bandwidthMonitor.getEstimatedMbps() * 1_000_000));
+              // Start Shaka's ABR from the measured (persisted) bandwidth without wiping startup buffers
+              const estBps = Math.max(1_200_000, Math.round(bandwidthMonitor.getEstimatedMbps() * 1_000_000));
               player.configure({
                 abr: {
                   enabled: true,
                   defaultBandwidthEstimate: estBps,
-                  switchInterval: 2,
-                  bandwidthUpgradeTarget: 0.72,
+                  switchInterval: 6,
+                  minTimeToSwitch: 6,
+                  bandwidthUpgradeTarget: 0.78,
                   bandwidthDowngradeTarget: 0.9,
-                  restrictions: {
-                    minHeight: 480,
+                  clearBufferSwitch: false,
+                  advanced: {
+                    minBytes: 128_000,
+                    minTotalBytes: 300_000,
                   },
                 },
+                mediaSource: {
+                  codecSwitchingStrategy: shaka.config?.CodecSwitchingStrategy?.SMOOTH || 'smooth',
+                },
                 streaming: {
-                  rebufferingGoal: 1.0,
-                  bufferingGoal: 14,
-                  bufferBehind: 24,
+                  rebufferingGoal: 1.5,
+                  bufferingGoal: 20,
+                  bufferBehind: 30,
                   retryParameters: {
-                    maxAttempts: 1,
-                    baseDelay: 250,
-                    backoffFactor: 1.2,
-                    timeout: 2400,
+                    maxAttempts: 2,
+                    baseDelay: 350,
+                    backoffFactor: 1.5,
+                    timeout: 7000,
                   },
                 },
               });
 
-              const normalizeTier = (w?: number, h?: number) => {
-                const vw = w || 0;
-                const vh = h || 0;
-                if (vw > 0 && vh > 0) {
-                  // For portrait videos (height > width), tier equals short side (e.g. 720x960 -> 720p, 1080x1920 -> 1080p)
-                  return vh > vw ? vw : vh;
-                }
-                return vh || vw || 720;
-              };
-
-              const updateActiveVariantHeight = () => {
+              const updateActiveVariantHeight = (fromAdaptation = false) => {
                 try {
                   const tracks = player.getVariantTracks?.() || [];
                   const active = tracks.find((t: any) => t.active);
-                  if (active) {
-                    setActiveHeight(normalizeTier(active.width, active.height));
-                  } else if (vidEl.videoHeight > 0) {
-                    setActiveHeight(normalizeTier(vidEl.videoWidth, vidEl.videoHeight));
+                  const tier = active
+                    ? normalizeVideoTier(active.width, active.height)
+                    : vidEl.videoHeight > 0
+                      ? normalizeVideoTier(vidEl.videoWidth, vidEl.videoHeight)
+                      : 0;
+                  if (tier > 0) {
+                    setActiveHeight(tier);
+                    if (
+                      fromAdaptation &&
+                      playbackStartedRef.current &&
+                      lastShakaTierRef.current > 0 &&
+                      tier > lastShakaTierRef.current
+                    ) {
+                      showQualityToast(
+                        `↑ Tự động nâng lên ${tier}p (~${Math.round(bandwidthMonitor.getEstimatedMbps())} Mbps)`
+                      );
+                    }
+                    lastShakaTierRef.current = tier;
                   }
                 } catch {
                   // ignore
                 }
               };
 
-              player.addEventListener('adaptation', updateActiveVariantHeight);
-              player.addEventListener('variantchanged', updateActiveVariantHeight);
+              player.addEventListener('adaptation', () => updateActiveVariantHeight(true));
+              player.addEventListener('variantchanged', () => updateActiveVariantHeight(false));
+              player.addEventListener('error', async (ev: any) => {
+                const detail = ev?.detail;
+                // Shaka severity 2 = CRITICAL
+                if (cancelled || detail?.severity !== 2 || shakaPlayerRef.current !== player) return;
+                console.warn('[PhimAI Player] Shaka critical runtime error -> switching to direct progressive:', detail);
+                const resumeAt = vidEl.currentTime || resumePos;
+                shakaPlayerRef.current = null;
+                await player.destroy().catch(() => {});
+                const muxed =
+                  qualList.find((q) => q.hasAudio && q.height >= 720) ||
+                  qualList.find((q) => q.hasAudio) || {
+                    id: '18',
+                    label: '360p',
+                    height: 360,
+                    itag: '18',
+                    url: `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`,
+                    hasAudio: true,
+                  };
+                void attachDirectQuality(muxed, resumeAt, videoData);
+              });
 
               const manifestUrl = dashManifest || hlsManifest;
               await Promise.race([
                 player.load(manifestUrl, resumePos > 0 ? resumePos : undefined),
                 new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error('Shaka manifest/segment timeout (2.6s)')), 2600)
+                  setTimeout(() => reject(new Error('Shaka manifest/segment timeout (7.5s)')), 7500)
                 ),
               ]);
               if (cancelled) return;
-
-              // Enforce minHeight 480p only if HD/480p+ variants actually exist in this video's manifest
-              const loadedTracks = player.getVariantTracks?.() || [];
-              const has480Plus = loadedTracks.some((t: any) => normalizeTier(t.width, t.height) >= 480);
-              if (!has480Plus) {
-                player.configure({ abr: { restrictions: { minHeight: 0 } } });
-              } else {
-                // Immediately select the highest variant supported by estimated bandwidth
-                const maxTarget = bandwidthMonitor.getRecommendedMaxHeight();
-                const candidates = loadedTracks
-                  .filter((t: any) => normalizeTier(t.width, t.height) <= maxTarget)
-                  .sort((a: any, b: any) => normalizeTier(b.width, b.height) - normalizeTier(a.width, a.height));
-                if (candidates.length > 0 && candidates[0].height && candidates[0].height < 480) {
-                  player.configure({ abr: { restrictions: { minHeight: 0 } } });
-                }
-              }
 
               // Prefer non-dub original / Vietnamese audio track instead of arbitrary language
               try {
@@ -543,17 +981,18 @@ export function MaterialiousPlayer({
                 // ignore
               }
 
-              // Sync discovered Shaka variant heights into Quality menu
+              // Sync discovered Shaka variant tiers into Quality menu using normalized portrait/landscape tier
               const vTracks = player.getVariantTracks?.() || [];
               if (Array.isArray(vTracks) && vTracks.length > 0) {
                 const mergedHeights = new Set(qualList.map((q) => q.height));
                 for (const t of vTracks) {
-                  if (t.height && t.height >= 144 && !mergedHeights.has(t.height)) {
-                    mergedHeights.add(t.height);
+                  const tier = normalizeVideoTier(t.width, t.height);
+                  if (tier >= 144 && !mergedHeights.has(tier)) {
+                    mergedHeights.add(tier);
                     qualList.push({
-                      id: `shaka_${t.height}`,
-                      label: formatQualityLabel(t.height, t.frameRate),
-                      height: t.height,
+                      id: `shaka_${tier}`,
+                      label: formatQualityLabel(tier, t.frameRate),
+                      height: tier,
                       fps: t.frameRate,
                       bitrate: t.bandwidth,
                       hasAudio: true,
@@ -566,21 +1005,21 @@ export function MaterialiousPlayer({
 
               usingProgressiveRef.current = false;
               setNeedsSeparateAudio(false);
-              updateActiveVariantHeight();
+              updateActiveVariantHeight(false);
               if (autoplay) {
                 vidEl.play().catch(() => {});
               }
               setIsBuffering(false);
 
-              // Verify Shaka actually decodes frames within 4s; otherwise drop to muxed MP4
+              // Verify Shaka actually decodes frames within 9s; otherwise drop to muxed MP4
               clearStartupWatchdog();
               startupWatchdogRef.current = setTimeout(async () => {
                 if (cancelled || playbackStartedRef.current || vidEl.readyState >= 2) return;
                 console.warn('[PhimAI Player] Shaka decoded-frame watchdog triggered -> switching to progressive MP4');
-                if (shakaPlayerRef.current) {
-                  await shakaPlayerRef.current.destroy().catch(() => {});
+                if (shakaPlayerRef.current === player) {
                   shakaPlayerRef.current = null;
                 }
+                await player.destroy().catch(() => {});
                 const muxed =
                   qualList.find((q) => q.hasAudio && q.height >= 720) ||
                   qualList.find((q) => q.hasAudio) || {
@@ -591,8 +1030,8 @@ export function MaterialiousPlayer({
                     url: `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`,
                     hasAudio: true,
                   };
-                attachDirectQuality(muxed, resumePos, videoData);
-              }, 4000);
+                void attachDirectQuality(muxed, resumePos, videoData);
+              }, 9000);
               return;
             }
           } catch (shakaErr) {
@@ -658,6 +1097,12 @@ export function MaterialiousPlayer({
 
     return () => {
       cancelled = true;
+      switchNonceRef.current += 1;
+      stagingCleanupRef.current?.();
+      stagingCleanupRef.current = null;
+      switchListenersCleanupRef.current?.();
+      switchListenersCleanupRef.current = null;
+      isSwitchingQualityRef.current = false;
       clearStartupWatchdog();
       if (shakaPlayerRef.current) {
         shakaPlayerRef.current.destroy().catch(() => {});
@@ -713,6 +1158,8 @@ export function MaterialiousPlayer({
     };
 
     const onPause = () => {
+      // Switching direct video src triggers a transient pause inside vid.load(); ignore so playback resumes.
+      if (isSwitchingQualityRef.current) return;
       setIsPlaying(false);
       setMediaSessionPlaybackState('paused');
       if (Number.isFinite(vid.duration) && vid.duration > 0) {
@@ -724,6 +1171,7 @@ export function MaterialiousPlayer({
     };
 
     const handleVidTimeUpdate = () => {
+      if (isSwitchingQualityRef.current) return;
       const cur = vid.currentTime;
       setCurrentTime(cur);
       onTimeUpdate?.(cur);
@@ -776,6 +1224,7 @@ export function MaterialiousPlayer({
     };
 
     const onWaiting = () => {
+      if (isSwitchingQualityRef.current) return;
       setIsBuffering(true);
       if (needsSeparateAudio && aud && !aud.paused) aud.pause();
       if (!playbackStartedRef.current) return;
@@ -792,7 +1241,7 @@ export function MaterialiousPlayer({
             qualities.find((q) => q.height < activeHeight && q.hasAudio) ||
             qualities.find((q) => q.height < activeHeight && q.height >= 360);
           if (lower) {
-            attachDirectQuality(lower, vid.currentTime);
+            void attachDirectQuality(lower, vid.currentTime, undefined, { seamless: true });
             showQualityToast(`↓ Giảm xuống ${lower.height}p do mạng chậm`);
           }
         }
@@ -838,12 +1287,14 @@ export function MaterialiousPlayer({
     };
 
     const onVideoError = () => {
+      // Mid-switch failures are rolled back by attachDirectQuality's own error handler
+      if (isSwitchingQualityRef.current) return;
       // If high-res adaptive stream fails cleanly, step down to progressive stream
       if (!usingProgressiveRef.current && shakaPlayerRef.current) return;
       if (usingProgressiveRef.current && !playbackStartedRef.current) {
         const latestFallbackUrl = `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`;
         if (!vid.src.includes('latest_version')) {
-          attachDirectQuality(
+          void attachDirectQuality(
             {
               id: '18',
               label: '360p',
@@ -912,7 +1363,7 @@ export function MaterialiousPlayer({
 
     const check = async () => {
       const vid = videoRef.current;
-      if (cancelled || busy || !vid || vid.paused) return;
+      if (cancelled || busy || !vid || vid.paused || isSwitchingQualityRef.current) return;
       if (shakaPlayerRef.current || !usingProgressiveRef.current || !playbackStartedRef.current) return;
 
       const now = Date.now();
@@ -921,23 +1372,30 @@ export function MaterialiousPlayer({
       if (stallTimestampsRef.current.some((t) => now - t < UPGRADE_STALL_QUIET_MS)) return;
       if (bufferedAhead(vid) < 8) return;
 
+      const eligible = qualities.filter(
+        (q) => !failedDirectIdsRef.current.has(q.id) && !failedDirectIdsRef.current.has(String(q.height))
+      );
+      if (eligible.length === 0) return;
+
       // Best quality the screen allows (bandwidth is checked after probing); nothing to do if already there.
       const cap = bandwidthMonitor.getScreenCapHeight();
-      const top = pickBestAutoQuality(qualities, cap, canDecode);
+      const top = pickBestAutoQuality(eligible, cap, canDecode);
       if (!top || top.height <= activeHeight) return;
 
       busy = true;
       lastProbeAtRef.current = now;
       try {
-        await bandwidthMonitor.probe(qualityStreamUrl(top, videoId));
-        if (cancelled) return;
-        const target = pickBestAutoQuality(qualities, cap, canDecode, bandwidthMonitor.getEstimatedMbps());
+        const measured = await bandwidthMonitor.probe(qualityStreamUrl(top, videoId));
+        if (cancelled || measured === null) return;
+        const target = pickBestAutoQuality(eligible, cap, canDecode, bandwidthMonitor.getEstimatedMbps());
         const cur = videoRef.current;
-        if (target && cur && target.height > activeHeight) {
-          attachDirectQuality(target, cur.currentTime);
-          showQualityToast(
-            `↑ Tự động nâng lên ${target.height}p (~${Math.round(bandwidthMonitor.getEstimatedMbps())} Mbps)`
-          );
+        if (target && cur && target.height > activeHeight && !isSwitchingQualityRef.current) {
+          const ok = await attachDirectQuality(target, cur.currentTime, undefined, { seamless: true });
+          if (ok && lastLoadedVideoIdRef.current === videoId) {
+            showQualityToast(
+              `↑ Tự động nâng lên ${target.height}p (~${Math.round(bandwidthMonitor.getEstimatedMbps())} Mbps)`
+            );
+          }
         }
       } finally {
         busy = false;
@@ -1017,49 +1475,93 @@ export function MaterialiousPlayer({
             player.configure({ abr: { enabled: true } });
             const tracks = player.getVariantTracks?.() || [];
             const active = tracks.find((t: any) => t.active);
-            if (active?.height) setActiveHeight(active.height);
+            if (active) {
+              const tier = normalizeVideoTier(active.width, active.height);
+              setActiveHeight(tier);
+              lastShakaTierRef.current = tier;
+            }
             return;
           } catch {
             // fallback
           }
         }
         const canDecode = (mime?: string) => !mime || videoRef.current?.canPlayType(mime) !== '';
+        const eligible = qualities.filter(
+          (opt) => !failedDirectIdsRef.current.has(opt.id) && !failedDirectIdsRef.current.has(String(opt.height))
+        );
         const best = pickBestAutoQuality(
-          qualities,
+          eligible.length > 0 ? eligible : qualities,
           bandwidthMonitor.getScreenCapHeight(),
           canDecode,
           bandwidthMonitor.getEstimatedMbps()
         );
-        if (best) attachDirectQuality(best, videoRef.current?.currentTime);
+        if (best) {
+          void attachDirectQuality(best, videoRef.current?.currentTime, undefined, { seamless: true });
+        }
         return;
       }
 
       if (!q) return;
+      const prevHeight = activeQualityRef.current?.height || activeHeight;
       setSelectedHeight(q.height);
       setActiveHeight(q.height);
 
       if (player) {
         try {
-          player.configure({ abr: { enabled: false } });
           const tracks = player.getVariantTracks?.() || [];
-          const match =
-            tracks.find((t: any) => t.height === q.height) ||
-            tracks.find((t: any) => Math.abs((t.height || 0) - q.height) <= 120);
-          if (match) {
-            player.selectVariantTrack(match, true);
+          const activeTrack = tracks.find((t: any) => t.active);
+          const activeCodecPrefix = (activeTrack?.videoCodec || '').split('.')[0];
+          const exactMatches = tracks.filter((t: any) => normalizeVideoTier(t.width, t.height) === q.height);
+          const nearMatches =
+            exactMatches.length > 0
+              ? exactMatches
+              : tracks.filter((t: any) => Math.abs(normalizeVideoTier(t.width, t.height) - q.height) <= 120);
+
+          if (nearMatches.length > 0) {
+            player.configure({ abr: { enabled: false } });
+            const rankTrack = (t: any) => {
+              const codec = (t.videoCodec || '').toLowerCase();
+              let score = 0;
+              if (activeCodecPrefix && codec.startsWith(activeCodecPrefix.toLowerCase())) score += 4;
+              if (codec.startsWith('avc1')) score += 2;
+              return score;
+            };
+            const sorted = [...nearMatches].sort(
+              (a: any, b: any) => rankTrack(b) - rankTrack(a) || (b.bandwidth || 0) - (a.bandwidth || 0)
+            );
+            const match = sorted[0];
+            lastShakaTierRef.current = q.height;
+            // Clear buffered future beyond a 1.5s safe margin so currently decoded frames keep playing smoothly
+            player.selectVariantTrack(match, true, 1.5);
+            showQualityToast(`Đang chuyển sang ${q.height}p...`);
             return;
           }
-          // If height only exists in adaptiveFormats (not Shaka manifest), destroy Shaka and play direct dual stream
-          void player.destroy().catch(() => {});
-          shakaPlayerRef.current = null;
+          // Height only exists outside Shaka manifest: keep Shaka alive while pre-staging direct stream
+          showQualityToast(`Đang chuyển sang ${q.height}p...`);
+          void attachDirectQuality(q, undefined, undefined, { seamless: true }).then((ok) => {
+            if (!ok) {
+              setActiveHeight(activeQualityRef.current?.height || prevHeight);
+              setSelectedHeight(activeQualityRef.current?.height || 0);
+              if (shakaPlayerRef.current) setQualityMode('auto');
+              showQualityToast(`Không thể chuyển ${q.height}p, giữ nguyên chất lượng hiện tại`);
+            }
+          });
+          return;
         } catch {
           // fallback below
         }
       }
 
-      attachDirectQuality(q, videoRef.current?.currentTime);
+      showQualityToast(`Đang chuyển sang ${q.height}p...`);
+      void attachDirectQuality(q, videoRef.current?.currentTime, undefined, { seamless: true }).then((ok) => {
+        if (!ok) {
+          setActiveHeight(activeQualityRef.current?.height || prevHeight);
+          setSelectedHeight(activeQualityRef.current?.height || 0);
+          showQualityToast(`Không thể chuyển ${q.height}p, giữ nguyên chất lượng hiện tại`);
+        }
+      });
     },
-    [qualities, attachDirectQuality]
+    [qualities, activeHeight, attachDirectQuality, showQualityToast]
   );
 
   const handleSpeedChange = (rate: number) => {
@@ -1357,9 +1859,9 @@ export function MaterialiousPlayer({
               zIndex: 1200,
               display: 'flex',
               alignItems: 'center',
-              backgroundColor: 'var(--yt-surface, #181818)',
-              border: '1px solid var(--yt-border, rgba(255,255,255,0.14))',
-              boxShadow: '0 12px 36px rgba(0, 0, 0, 0.7)',
+              backgroundColor: 'var(--color-background-surface, #161822)',
+              border: '1px solid var(--color-border-emphasized, rgba(244, 244, 246, 0.24))',
+              boxShadow: 'var(--shadow-high, 0 24px 64px -16px rgba(0, 0, 0, 0.85))',
               overflow: 'hidden',
               animation: 'mpSlideUpMini 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
             }
@@ -1409,9 +1911,27 @@ export function MaterialiousPlayer({
         )}
       </video>
 
+      {!compact && (
+        <canvas
+          ref={freezeCanvasRef}
+          data-testid="quality-switch-freeze"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: activeFullscreen ? verticalFillMode : 'contain',
+            zIndex: 2,
+            pointerEvents: 'none',
+            display: isSwitchingQuality ? 'block' : 'none',
+            backgroundColor: '#000',
+          }}
+        />
+      )}
+
       <audio ref={audioRef} playsInline style={{ display: 'none' }} />
 
-      {!compact && videoId && (
+      {!compact && videoId && previewEnabled && (
         <video
           ref={previewVideoRef}
           src={`/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`}
@@ -1549,7 +2069,7 @@ export function MaterialiousPlayer({
                   {uploader || 'PhimAI'}
                 </span>
                 <span>•</span>
-                <span style={{ flexShrink: 0 }}>
+                <span className="phimai-tabular" style={{ flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
                   {formatTime(currentTime)}
                   {duration > 0 ? ` / ${formatTime(duration)}` : ''}
                 </span>
@@ -1558,7 +2078,7 @@ export function MaterialiousPlayer({
             <div
               style={{
                 height: '3px',
-                background: 'rgba(255,255,255,0.16)',
+                background: 'rgba(244, 244, 246, 0.14)',
                 borderRadius: '2px',
                 overflow: 'hidden',
               }}
@@ -1567,7 +2087,7 @@ export function MaterialiousPlayer({
                 style={{
                   height: '100%',
                   width: `${progressPercent}%`,
-                  background: '#ff0033',
+                  background: '#e50914',
                 }}
               />
             </div>
@@ -1711,16 +2231,18 @@ export function MaterialiousPlayer({
                 top: '12px',
                 left: '50%',
                 transform: 'translateX(-50%)',
-                padding: '6px 12px',
-                borderRadius: '16px',
-                backgroundColor: 'rgba(0,0,0,0.78)',
-                backdropFilter: 'blur(4px)',
-                color: '#fff',
+                padding: '6px 14px',
+                borderRadius: '9999px',
+                backgroundColor: 'rgba(13, 14, 20, 0.90)',
+                backdropFilter: 'blur(8px)',
+                border: '1px solid rgba(255, 216, 117, 0.36)',
+                color: '#f4f4f6',
                 fontSize: '12.5px',
                 fontWeight: 600,
                 whiteSpace: 'nowrap',
                 zIndex: 25,
                 pointerEvents: 'none',
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.65)',
               }}
             >
               {qualityToast}
@@ -1758,10 +2280,10 @@ export function MaterialiousPlayer({
                   }}
                   style={{
                     padding: '8px 18px',
-                    borderRadius: '20px',
+                    borderRadius: '8px',
                     border: 'none',
-                    backgroundColor: '#ff0033',
-                    color: '#fff',
+                    backgroundColor: '#e50914',
+                    color: '#ffffff',
                     fontWeight: 600,
                     cursor: 'pointer',
                   }}
@@ -1856,11 +2378,11 @@ export function MaterialiousPlayer({
                   resetControlsTimer(3000);
                 }}
                 style={{
-                  background: verticalFillMode === 'cover' ? 'rgba(255, 0, 51, 0.85)' : 'rgba(255,255,255,0.16)',
-                  border: '1px solid rgba(255,255,255,0.22)',
-                  color: '#fff',
+                  background: verticalFillMode === 'cover' ? 'rgba(229, 9, 20, 0.88)' : 'rgba(13, 14, 20, 0.72)',
+                  border: '1px solid rgba(244, 244, 246, 0.22)',
+                  color: '#f4f4f6',
                   padding: '6px 10px',
-                  borderRadius: '18px',
+                  borderRadius: '8px',
                   fontSize: '11.5px',
                   fontWeight: 600,
                   display: 'inline-flex',
@@ -1991,8 +2513,10 @@ export function MaterialiousPlayer({
             <div
               ref={timelineRef}
               data-testid="player-timeline"
+              onMouseEnter={() => setPreviewEnabled(true)}
               onMouseDown={(e) => {
                 e.stopPropagation();
+                setPreviewEnabled(true);
                 if (Date.now() - lastTouchTimeRef.current < 500) return;
                 isMouseDraggingRef.current = true;
                 setIsScrubbing(true);
@@ -2013,6 +2537,7 @@ export function MaterialiousPlayer({
               }}
               onTouchStart={(e) => {
                 e.stopPropagation();
+                setPreviewEnabled(true);
                 lastTouchTimeRef.current = Date.now();
                 if (e.touches.length > 0) {
                   setIsScrubbing(true);
@@ -2079,9 +2604,9 @@ export function MaterialiousPlayer({
                       height: '90px',
                       borderRadius: '8px',
                       overflow: 'hidden',
-                      border: '2px solid rgba(255,255,255,0.85)',
-                      backgroundColor: '#0f0f0f',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.8)',
+                      border: '1px solid rgba(255, 216, 117, 0.65)',
+                      backgroundColor: '#0d0e14',
+                      boxShadow: '0 14px 34px -8px rgba(0, 0, 0, 0.85)',
                     }}
                   >
                     {thumbnail && (
@@ -2115,14 +2640,15 @@ export function MaterialiousPlayer({
                   <div
                     data-testid="timeline-preview-time"
                     style={{
-                      backgroundColor: 'rgba(15, 15, 15, 0.92)',
-                      color: '#fff',
+                      backgroundColor: 'rgba(13, 14, 20, 0.94)',
+                      color: '#ffd875',
+                      fontFamily: 'var(--font-family-code, "JetBrains Mono", monospace)',
                       fontSize: '11.5px',
                       fontWeight: 700,
                       padding: '2px 8px',
                       borderRadius: '6px',
-                      border: '1px solid rgba(255,255,255,0.18)',
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.6)',
+                      border: '1px solid rgba(255, 216, 117, 0.36)',
+                      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.7)',
                       fontVariantNumeric: 'tabular-nums',
                     }}
                   >
@@ -2160,7 +2686,7 @@ export function MaterialiousPlayer({
                     bottom: 0,
                     left: 0,
                     width: `${displayedProgressPercent}%`,
-                    backgroundColor: '#ff0033',
+                    backgroundColor: '#e50914',
                     borderRadius: '4px',
                   }}
                 >
@@ -2173,8 +2699,8 @@ export function MaterialiousPlayer({
                       width: isScrubbing ? '16px' : '12px',
                       height: isScrubbing ? '16px' : '12px',
                       borderRadius: '50%',
-                      backgroundColor: '#ff0033',
-                      boxShadow: isScrubbing ? '0 0 0 4px rgba(255, 0, 51, 0.32)' : 'none',
+                      backgroundColor: '#e50914',
+                      boxShadow: isScrubbing ? '0 0 0 4px rgba(229, 9, 20, 0.35)' : '0 1px 4px rgba(0,0,0,0.6)',
                       transition: 'width 0.12s ease, height 0.12s ease',
                     }}
                   />
@@ -2275,9 +2801,9 @@ export function MaterialiousPlayer({
                   className="player-loop-btn"
                   onClick={() => setIsLooping(!isLooping)}
                   style={{
-                    background: isLooping ? 'rgba(255,255,255,0.2)' : 'none',
+                    background: isLooping ? 'rgba(255, 216, 117, 0.16)' : 'none',
                     border: 'none',
-                    color: isLooping ? '#3ea6ff' : '#fff',
+                    color: isLooping ? '#ffd875' : '#f4f4f6',
                     padding: '6px',
                     borderRadius: '50%',
                     cursor: 'pointer',
@@ -2367,7 +2893,7 @@ export function MaterialiousPlayer({
                       }}
                     >
                       <span>Chất lượng video</span>
-                      <span style={{ color: '#3ea6ff', fontWeight: 600 }}>
+                      <span style={{ color: '#ffd875', fontWeight: 600 }}>
                         {qualityMode === 'auto' ? `Tự động (${activeHeight}p)` : formatQualityLabel(selectedHeight || activeHeight)}
                       </span>
                     </button>
@@ -2462,9 +2988,9 @@ export function MaterialiousPlayer({
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        background: qualityMode === 'auto' ? 'rgba(62,166,255,0.18)' : 'none',
+                        background: qualityMode === 'auto' ? 'rgba(255, 216, 117, 0.14)' : 'none',
                         border: 'none',
-                        color: qualityMode === 'auto' ? '#3ea6ff' : '#fff',
+                        color: qualityMode === 'auto' ? '#ffd875' : '#f4f4f6',
                         padding: '8px 10px',
                         borderRadius: '8px',
                         cursor: 'pointer',
@@ -2484,9 +3010,9 @@ export function MaterialiousPlayer({
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'space-between',
-                          background: qualityMode === 'manual' && selectedHeight === q.height ? 'rgba(255,255,255,0.16)' : 'none',
+                          background: qualityMode === 'manual' && selectedHeight === q.height ? 'rgba(255, 216, 117, 0.14)' : 'none',
                           border: 'none',
-                          color: qualityMode === 'manual' && selectedHeight === q.height ? '#3ea6ff' : '#fff',
+                          color: qualityMode === 'manual' && selectedHeight === q.height ? '#ffd875' : '#f4f4f6',
                           padding: '7px 10px',
                           borderRadius: '8px',
                           cursor: 'pointer',
@@ -2527,9 +3053,9 @@ export function MaterialiousPlayer({
                         style={{
                           display: 'flex',
                           justifyContent: 'space-between',
-                          background: playbackRate === r ? 'rgba(255,255,255,0.15)' : 'none',
+                          background: playbackRate === r ? 'rgba(255, 216, 117, 0.14)' : 'none',
                           border: 'none',
-                          color: playbackRate === r ? '#3ea6ff' : '#fff',
+                          color: playbackRate === r ? '#ffd875' : '#f4f4f6',
                           padding: '8px 10px',
                           borderRadius: '8px',
                           cursor: 'pointer',
@@ -2573,9 +3099,9 @@ export function MaterialiousPlayer({
                         style={{
                           display: 'flex',
                           justifyContent: 'space-between',
-                          background: sleepMinutes === m ? 'rgba(255,255,255,0.15)' : 'none',
+                          background: sleepMinutes === m ? 'rgba(255, 216, 117, 0.14)' : 'none',
                           border: 'none',
-                          color: sleepMinutes === m ? '#3ea6ff' : '#fff',
+                          color: sleepMinutes === m ? '#ffd875' : '#f4f4f6',
                           padding: '8px 10px',
                           borderRadius: '8px',
                           cursor: 'pointer',
@@ -2618,9 +3144,9 @@ export function MaterialiousPlayer({
                       style={{
                         display: 'flex',
                         justifyContent: 'space-between',
-                        background: currentCaption === 'off' ? 'rgba(255,255,255,0.15)' : 'none',
+                        background: currentCaption === 'off' ? 'rgba(255, 216, 117, 0.14)' : 'none',
                         border: 'none',
-                        color: currentCaption === 'off' ? '#3ea6ff' : '#fff',
+                        color: currentCaption === 'off' ? '#ffd875' : '#f4f4f6',
                         padding: '8px 10px',
                         borderRadius: '8px',
                         cursor: 'pointer',
@@ -2642,9 +3168,9 @@ export function MaterialiousPlayer({
                         style={{
                           display: 'flex',
                           justifyContent: 'space-between',
-                          background: currentCaption === c.languageCode ? 'rgba(255,255,255,0.15)' : 'none',
+                          background: currentCaption === c.languageCode ? 'rgba(255, 216, 117, 0.14)' : 'none',
                           border: 'none',
-                          color: currentCaption === c.languageCode ? '#3ea6ff' : '#fff',
+                          color: currentCaption === c.languageCode ? '#ffd875' : '#f4f4f6',
                           padding: '8px 10px',
                           borderRadius: '8px',
                           cursor: 'pointer',

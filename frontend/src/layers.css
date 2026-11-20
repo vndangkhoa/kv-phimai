@@ -1,0 +1,4 @@
+/* Explicit cascade-layer order for Tailwind v3 + Astryx 0.7.16 coexistence.
+ * Must be imported first in main.tsx so Vite/PostCSS does not hoist @import
+ * rules above this @layer order declaration. */
+@layer reset, tw-preflight, astryx-base, astryx-theme;

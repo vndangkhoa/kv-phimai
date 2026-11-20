@@ -1,5 +1,6 @@
 import React, { memo, useState, useEffect } from 'react';
-import { IoBookmark, IoBookmarkOutline, IoCheckmarkCircle, IoLayersOutline } from 'react-icons/io5';
+import { Avatar } from '@astryxdesign/core/Avatar';
+import { Bookmark, BadgeCheck, Layers } from 'lucide-react';
 import type { Film } from '../types/phimai';
 import {
   getThumbUrl,
@@ -20,7 +21,7 @@ interface VideoCardProps {
 }
 
 const DEFAULT_THUMB =
-  'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"%3E%3Crect fill="%23181818" width="320" height="180"/%3E%3Cpath fill="%23ff0033" d="M142 65v50l42-25z"/%3E%3C/svg%3E';
+  'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"%3E%3Crect fill="%23161822" width="320" height="180"/%3E%3Cpath fill="%23e50914" d="M142 65v50l42-25z"/%3E%3C/svg%3E';
 
 export const VideoCard = memo(function VideoCard({
   film,
@@ -68,7 +69,7 @@ export const VideoCard = memo(function VideoCard({
   };
 
   return (
-    <div className="yt-video-card-container">
+    <article className="yt-video-card-container">
       <div className={`yt-card-stack${episodes ? ' is-stacked' : ''}`}>
         {episodes && (
           <>
@@ -76,117 +77,119 @@ export const VideoCard = memo(function VideoCard({
             <div className="yt-card-stack-layer yt-card-stack-layer-1" aria-hidden="true" />
           </>
         )}
-      <div className="yt-card-thumb-wrapper">
-        <a
-          href={`/watch?v=${encodeURIComponent(film.id)}`}
-          onClick={handleOpen}
-          className="yt-card-thumb-link"
-        >
-          <img
-            src={thumbUrl}
-            alt={film.title}
-            loading="lazy"
-            decoding="async"
-            onError={() => setImgErr(true)}
-            className="yt-card-thumb-img"
-          />
-
-          {/* Top-left Tool & Fresh Release Badge */}
-          <div
-            style={{
-              position: 'absolute',
-              top: '8px',
-              left: '8px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              zIndex: 3,
-            }}
+        <div className="yt-card-thumb-wrapper">
+          <a
+            href={`/watch?v=${encodeURIComponent(film.id)}`}
+            onClick={handleOpen}
+            className="yt-card-thumb-link"
           >
-            {(film.tags?.includes('moi-nhat') || film.rank > 9258) && (
-              <div
-                style={{
-                  background: '#ff0033',
-                  color: '#ffffff',
-                  fontSize: '10px',
-                  fontWeight: 800,
-                  padding: '2px 6px',
-                  borderRadius: '6px',
-                  letterSpacing: '0.3px',
-                  boxShadow: '0 2px 6px rgba(0,0,0,0.45)',
-                }}
-              >
-                MỚI
-              </div>
-            )}
+            <img
+              src={thumbUrl}
+              alt={film.title}
+              loading="lazy"
+              decoding="async"
+              onError={() => setImgErr(true)}
+              className="yt-card-thumb-img"
+            />
+
+            {/* Top-left Tool & Fresh Release Overlay Badges */}
             <div
               style={{
-                background: 'rgba(15, 15, 15, 0.82)',
-                color: '#f1f1f1',
-                fontSize: '10.5px',
-                fontWeight: 700,
-                padding: '2px 7px',
-                borderRadius: '6px',
-                letterSpacing: '0.2px',
+                position: 'absolute',
+                top: '8px',
+                left: '8px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                zIndex: 3,
               }}
             >
-              {firstTool}
+              {(film.tags?.includes('moi-nhat') || film.rank > 9258) && (
+                <div
+                  style={{
+                    background: '#e50914',
+                    color: '#ffffff',
+                    fontSize: '10px',
+                    fontWeight: 800,
+                    padding: '2px 6px',
+                    borderRadius: '5px',
+                    letterSpacing: '0.04em',
+                    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.5)',
+                  }}
+                >
+                  MỚI
+                </div>
+              )}
+              <div
+                style={{
+                  background: 'rgba(13, 14, 20, 0.86)',
+                  border: '1px solid rgba(255, 216, 117, 0.30)',
+                  color: '#ffd875',
+                  fontSize: '10.5px',
+                  fontWeight: 700,
+                  padding: '2px 7px',
+                  borderRadius: '5px',
+                  letterSpacing: '0.02em',
+                }}
+              >
+                {firstTool}
+              </div>
             </div>
-          </div>
 
-          {/* Hover Save / Bookmark Quick Button */}
-          <div
-            className="yt-thumb-quick-actions"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-          >
-            <button
-              type="button"
-              className="yt-thumb-action-btn"
-              onClick={() => onToggleSave(film.id)}
-              title={saved ? 'Bỏ khỏi Xem sau' : 'Lưu xem sau'}
-              aria-label={saved ? 'Bỏ khỏi Xem sau' : 'Lưu xem sau'}
+            {/* Hover / Focus / Touch Save Bookmark Quick Action */}
+            <div
+              className="yt-thumb-quick-actions"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
             >
-              {saved ? <IoBookmark size={16} color="#ff0033" /> : <IoBookmarkOutline size={16} />}
-            </button>
-          </div>
-
-          {/* Duration Badge */}
-          {film.dur && <div className="yt-card-duration-badge">{film.dur}</div>}
-
-          {/* Stacked series episode count */}
-          {episodes && (
-            <div className="yt-card-stack-badge" data-testid="stack-badge">
-              <IoLayersOutline size={14} />
-              <span>{episodes.length} tập</span>
+              <button
+                type="button"
+                className="yt-thumb-action-btn"
+                onClick={() => onToggleSave(film.id)}
+                title={saved ? 'Bỏ khỏi Xem sau' : 'Lưu xem sau'}
+                aria-label={saved ? 'Bỏ khỏi Xem sau' : 'Lưu xem sau'}
+              >
+                <Bookmark
+                  size={15}
+                  strokeWidth={1.75}
+                  color={saved ? '#ffd875' : '#f4f4f6'}
+                  fill={saved ? '#ffd875' : 'none'}
+                />
+              </button>
             </div>
-          )}
 
-          {/* Watch Progress Bar */}
-          {progressPct > 0 && (
-            <div className="yt-card-progress-bar-bg">
-              <div className="yt-card-progress-bar-fill" style={{ width: `${progressPct}%` }} />
-            </div>
-          )}
-        </a>
-      </div>
+            {/* Duration Badge */}
+            {film.dur && <div className="yt-card-duration-badge">{film.dur}</div>}
+
+            {/* Stacked series episode count */}
+            {episodes && (
+              <div className="yt-card-stack-badge" data-testid="stack-badge">
+                <Layers size={13} strokeWidth={1.75} />
+                <span>{episodes.length} tập</span>
+              </div>
+            )}
+
+            {/* Watch Progress Bar */}
+            {progressPct > 0 && (
+              <div className="yt-card-progress-bar-bg">
+                <div className="yt-card-progress-bar-fill" style={{ width: `${progressPct}%` }} />
+              </div>
+            )}
+          </a>
+        </div>
       </div>
 
       {/* Metadata Row */}
       <div className="yt-card-details-row">
-        <button
-          type="button"
+        <Avatar
+          size={36}
+          name={film.channel || 'PhimAI'}
+          alt={`Xem kênh ${film.channel || 'PhimAI'}`}
+          tooltip={false}
           onClick={() => onFilterChannel?.(film.channel)}
-          className="yt-card-avatar-link"
-          style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}
-          title={`Xem kênh ${film.channel}`}
-        >
-          <div className="yt-card-avatar-circle">
-            <span>{(film.channel || 'P').charAt(0).toUpperCase()}</span>
-          </div>
-        </button>
+        />
 
         <div className="yt-card-text-container">
           <a
@@ -207,7 +210,7 @@ export const VideoCard = memo(function VideoCard({
               style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}
             >
               <span>{film.channel}</span>
-              <IoCheckmarkCircle size={13} className="yt-card-verified-icon" />
+              <BadgeCheck size={13} strokeWidth={1.75} style={{ color: 'var(--color-accent, #ffd875)', flexShrink: 0 }} />
             </button>
 
             <div className="yt-card-meta-line">
@@ -225,7 +228,9 @@ export const VideoCard = memo(function VideoCard({
               {film.rank ? (
                 <>
                   <span className="yt-card-meta-dot">•</span>
-                  <span>#{film.rank}</span>
+                  <span style={{ color: 'var(--color-accent, #ffd875)', fontFamily: 'var(--font-family-code, monospace)' }}>
+                    #{film.rank}
+                  </span>
                 </>
               ) : null}
             </div>
@@ -258,6 +263,6 @@ export const VideoCard = memo(function VideoCard({
           </div>
         </div>
       </div>
-    </div>
+    </article>
   );
 });

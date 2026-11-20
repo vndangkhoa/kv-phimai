@@ -1,7 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-// index.css first: it declares the cascade-layer order (reset → tw-preflight →
-// astryx-base → astryx-theme) before any other stylesheet names a layer.
+import './layers.css'
+// layers.css first: declares cascade order (reset -> tw-preflight -> astryx-base -> astryx-theme)
+// before index.css imports Astryx and Cinema Noir stylesheets.
 import './index.css'
 import { Theme } from '@astryxdesign/core/theme'
 import { cinemaNoirTheme } from './theme'
