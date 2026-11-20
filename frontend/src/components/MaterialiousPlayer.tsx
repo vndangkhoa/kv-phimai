@@ -607,7 +607,22 @@ export function MaterialiousPlayer({
           failedDirectIdsRef.current.add(String(q.height));
           finishTransition(false);
 
+          const latestUrl = `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`;
+          const latest360: QualityOption = {
+            id: 'latest_18',
+            label: '360p',
+            height: 360,
+            itag: '18',
+            url: latestUrl,
+            hasAudio: true,
+          };
+
           if (opts?.isRollback) {
+            if (streamSrc !== latestUrl && !failedDirectIdsRef.current.has('latest_18')) {
+              setActiveHeight(360);
+              void attachDirectQuality(latest360, swapTime, vData, { isRollback: true });
+              return;
+            }
             if (!playbackStartedRef.current) {
               setIsBuffering(false);
               setErrorMsg('Luồng video gặp gián đoạn, vui lòng thử lại.');
@@ -615,25 +630,23 @@ export function MaterialiousPlayer({
             return;
           }
 
-          const vStreamFallback = vData.streams?.find((s) => s.url);
-          const listMuxedFallback = qualitiesRef.current.find((opt) => opt.hasAudio && opt.id !== q.id);
-          const default360: QualityOption = {
-            id: '18',
-            label: '360p',
-            height: 360,
-            itag: '18',
-            url: vStreamFallback?.url
-              ? proxySameOriginUrl(vStreamFallback.url)
-              : `/api/invidious/latest_version?id=${encodeURIComponent(videoId)}&itag=18&local=true`,
-            hasAudio: true,
-          };
+          const listMuxedFallback = qualitiesRef.current.find(
+            (opt) =>
+              opt.hasAudio &&
+              opt.id !== q.id &&
+              !failedDirectIdsRef.current.has(opt.id) &&
+              qualityStreamUrl(opt, videoId) !== streamSrc
+          );
 
           const fallbackTarget =
-            prevQuality && prevQuality.id !== q.id && !failedDirectIdsRef.current.has(prevQuality.id)
+            prevQuality &&
+            prevQuality.id !== q.id &&
+            !failedDirectIdsRef.current.has(prevQuality.id) &&
+            qualityStreamUrl(prevQuality, videoId) !== streamSrc
               ? prevQuality
-              : listMuxedFallback || default360;
+              : listMuxedFallback || (streamSrc !== latestUrl && !failedDirectIdsRef.current.has('latest_18') ? latest360 : null);
 
-          if (qualityStreamUrl(fallbackTarget, videoId) === streamSrc && fallbackTarget.id === q.id) {
+          if (!fallbackTarget) {
             if (!playbackStartedRef.current) {
               setIsBuffering(false);
               setErrorMsg('Luồng video gặp gián đoạn, vui lòng thử lại.');
@@ -725,12 +738,14 @@ export function MaterialiousPlayer({
         curVid.playbackRate = playbackRateRef.current;
         curVid.load();
 
-        // Guardrail on every direct transition: if frames don't decode/resume within 6s, roll back.
+        // Guardrail on every direct transition: tolerate cold Companion handshakes on initial load,
+        // and roll back cleanly if frames don't decode/resume within the deadline.
+        const watchdogMs = isMidPlaybackSwitch ? 8000 : 14000;
         startupWatchdogRef.current = setTimeout(() => {
           if (!settled && switchNonceRef.current === myNonce) {
-            triggerRollback('timeout 6s');
+            triggerRollback(`timeout ${Math.round(watchdogMs / 1000)}s`);
           }
-        }, 6000);
+        }, watchdogMs);
       });
     },
     [videoId, captureFreezeFrame, clearStartupWatchdog]
@@ -901,7 +916,7 @@ export function MaterialiousPlayer({
                     maxAttempts: 2,
                     baseDelay: 350,
                     backoffFactor: 1.5,
-                    timeout: 7000,
+                    timeout: 12000,
                   },
                 },
               });
@@ -961,7 +976,7 @@ export function MaterialiousPlayer({
               await Promise.race([
                 player.load(manifestUrl, resumePos > 0 ? resumePos : undefined),
                 new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error('Shaka manifest/segment timeout (7.5s)')), 7500)
+                  setTimeout(() => reject(new Error('Shaka manifest/segment timeout (14s)')), 14000)
                 ),
               ]);
               if (cancelled) return;
@@ -1011,7 +1026,7 @@ export function MaterialiousPlayer({
               }
               setIsBuffering(false);
 
-              // Verify Shaka actually decodes frames within 9s; otherwise drop to muxed MP4
+              // Verify Shaka actually decodes frames within 12s; otherwise drop to muxed MP4
               clearStartupWatchdog();
               startupWatchdogRef.current = setTimeout(async () => {
                 if (cancelled || playbackStartedRef.current || vidEl.readyState >= 2) return;
@@ -1031,7 +1046,7 @@ export function MaterialiousPlayer({
                     hasAudio: true,
                   };
                 void attachDirectQuality(muxed, resumePos, videoData);
-              }, 9000);
+              }, 12000);
               return;
             }
           } catch (shakaErr) {

@@ -33,6 +33,16 @@ type cachedBytes struct {
 	expiry      time.Time
 }
 
+type edgeOverride struct {
+	host   string
+	expiry time.Time
+}
+
+type mediaCandidate struct {
+	url      string
+	edgeHost string
+}
+
 type inflightCall struct {
 	wg   sync.WaitGroup
 	data models.KVTubeVideoResponse
@@ -43,27 +53,33 @@ type Service struct {
 	UpstreamRoot     string
 	WarpProxyURL     string
 	warpHostPort     string
+	hedgeDelay       time.Duration
 	OnDeadVideo      func(videoID string)
 	apiClient        *http.Client
 	streamClient     *http.Client
 	warpAPIClient    *http.Client
 	warpStreamClient *http.Client
 
-	mu           sync.RWMutex
-	videoCache   map[string]cachedVideo
-	rawCache     map[string]cachedBytes
-	thumbCache   map[string]cachedBytes
-	inflight     map[string]*inflightCall
-	inflightLock sync.Mutex
+	mu                     sync.RWMutex
+	videoCache             map[string]cachedVideo
+	rawCache               map[string]cachedBytes
+	thumbCache             map[string]cachedBytes
+	inflight               map[string]*inflightCall
+	inflightLock           sync.Mutex
+	edgeMu                 sync.RWMutex
+	badEdgeHosts           map[string]time.Time
+	preferredEdgeByPrimary map[string]edgeOverride
 
 	warpMu           sync.Mutex
 	warpCheckedAt    time.Time
 	warpActiveCached bool
+	warpBackoffUntil time.Time
 }
 
 var (
 	reQualityHeight = regexp.MustCompile(`(\d+)p`)
 	reMPDBaseURL    = regexp.MustCompile(`<BaseURL>([^<]+)</BaseURL>`)
+	reEdgeLabel     = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 	// Absolute URLs on an Invidious / Companion host (any domain the backend reports
 	// for itself), captured as host + backend path so they can become same-origin.
 	reBackendAbsURL = regexp.MustCompile(`https?://([A-Za-z0-9.\-]+(?::\d+)?)(/(?:videoplayback|companion/|api/|latest_version|vi/)[^\s"<>]*)`)
@@ -84,8 +100,8 @@ func isGoogleVideoHost(host string) bool {
 	return h == "googlevideo.com" || strings.HasSuffix(h, ".googlevideo.com")
 }
 
-func buildClients(proxyFunc func(*http.Request) (*url.URL, error)) (*http.Client, *http.Client) {
-	transport := &http.Transport{
+func newTransport(proxyFunc func(*http.Request) (*url.URL, error), responseHeaderTimeout time.Duration) *http.Transport {
+	return &http.Transport{
 		Proxy: proxyFunc,
 		DialContext: (&net.Dialer{
 			Timeout:   8 * time.Second,
@@ -97,19 +113,24 @@ func buildClients(proxyFunc func(*http.Request) (*url.URL, error)) (*http.Client
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   8 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 9 * time.Second,
+		ResponseHeaderTimeout: responseHeaderTimeout,
 	}
+}
+
+func buildClients(proxyFunc func(*http.Request) (*url.URL, error)) (*http.Client, *http.Client) {
+	apiTransport := newTransport(proxyFunc, 10*time.Second)
+	streamTransport := newTransport(proxyFunc, 14*time.Second)
 
 	apiClient := &http.Client{
 		Timeout:   14 * time.Second,
-		Transport: transport,
+		Transport: apiTransport,
 	}
 
 	// Stream client with manual redirect interception so 302s to *.googlevideo.com
 	// stay inside the server and retain WARP/upstream headers cleanly.
 	streamClient := &http.Client{
 		Timeout:   0,
-		Transport: transport,
+		Transport: streamTransport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -141,18 +162,21 @@ func NewService(companionBase string, upstream string) *Service {
 	}
 
 	return &Service{
-		BaseURL:          cleaned,
-		UpstreamRoot:     upstream,
-		WarpProxyURL:     warpProxyURL,
-		warpHostPort:     warpHostPort,
-		apiClient:        apiClient,
-		streamClient:     streamClient,
-		warpAPIClient:    warpAPIClient,
-		warpStreamClient: warpStreamClient,
-		videoCache:       make(map[string]cachedVideo),
-		rawCache:         make(map[string]cachedBytes),
-		thumbCache:       make(map[string]cachedBytes),
-		inflight:         make(map[string]*inflightCall),
+		BaseURL:                cleaned,
+		UpstreamRoot:           upstream,
+		WarpProxyURL:           warpProxyURL,
+		warpHostPort:           warpHostPort,
+		hedgeDelay:             3 * time.Second,
+		apiClient:              apiClient,
+		streamClient:           streamClient,
+		warpAPIClient:          warpAPIClient,
+		warpStreamClient:       warpStreamClient,
+		videoCache:             make(map[string]cachedVideo),
+		rawCache:               make(map[string]cachedBytes),
+		thumbCache:             make(map[string]cachedBytes),
+		inflight:               make(map[string]*inflightCall),
+		badEdgeHosts:           make(map[string]time.Time),
+		preferredEdgeByPrimary: make(map[string]edgeOverride),
 	}
 }
 
@@ -161,16 +185,49 @@ func (s *Service) IsConfigured() bool {
 	return s.UpstreamRoot != ""
 }
 
+func stripPortFromHost(hostport string) string {
+	trimmed := strings.TrimSpace(hostport)
+	if trimmed == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(trimmed); err == nil {
+		return strings.Trim(h, "[]")
+	}
+	return strings.Trim(trimmed, "[]")
+}
+
+// isPrivateOrLocalHost reports whether hostport targets localhost, a Docker service name,
+// a local DNS suffix (.local / .internal), or a loopback/RFC1918/link-local IP address.
+func isPrivateOrLocalHost(hostport string) bool {
+	h := strings.ToLower(stripPortFromHost(hostport))
+	if h == "" {
+		return true
+	}
+	if h == "localhost" ||
+		strings.HasSuffix(h, ".localhost") ||
+		strings.HasSuffix(h, ".local") ||
+		strings.HasSuffix(h, ".internal") {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	}
+	return !strings.Contains(h, ".")
+}
+
 // isUpstreamHost reports whether host belongs to the configured Invidious /
 // Companion backend (so its absolute URLs can be rewritten to same-origin paths).
 func (s *Service) isUpstreamHost(host string) bool {
-	host = strings.ToLower(host)
-	if host == "" {
+	lowerHost := strings.ToLower(strings.TrimSpace(host))
+	hostOnly := strings.ToLower(stripPortFromHost(lowerHost))
+	if lowerHost == "" {
 		return false
 	}
 	for _, base := range []string{s.BaseURL, s.UpstreamRoot} {
-		if u, err := url.Parse(base); err == nil && strings.EqualFold(u.Host, host) {
-			return true
+		if u, err := url.Parse(base); err == nil && u.Host != "" {
+			if strings.EqualFold(u.Host, lowerHost) || (hostOnly != "" && strings.EqualFold(u.Hostname(), hostOnly)) {
+				return true
+			}
 		}
 	}
 	return false
@@ -182,6 +239,10 @@ func (s *Service) IsWarpActive() bool {
 		return false
 	}
 	s.warpMu.Lock()
+	if !s.warpBackoffUntil.IsZero() && time.Now().Before(s.warpBackoffUntil) {
+		s.warpMu.Unlock()
+		return false
+	}
 	ttl := 12 * time.Second
 	if !s.warpActiveCached {
 		ttl = 3 * time.Second
@@ -206,6 +267,34 @@ func (s *Service) IsWarpActive() bool {
 	return active
 }
 
+func (s *Service) shouldUseWarpForHost(host string, forceWarp bool) bool {
+	if s.warpAPIClient == nil || !s.IsWarpActive() {
+		return false
+	}
+	if isPrivateOrLocalHost(host) {
+		return false
+	}
+	if !forceWarp && s.isUpstreamHost(host) {
+		return false
+	}
+	return true
+}
+
+func (s *Service) tripWarpBackoff() {
+	s.warpMu.Lock()
+	s.warpBackoffUntil = time.Now().Add(60 * time.Second)
+	s.warpActiveCached = false
+	s.warpCheckedAt = time.Now()
+	s.warpMu.Unlock()
+}
+
+func (s *Service) doDirectRequest(req *http.Request, isStream bool) (*http.Response, error) {
+	if isStream {
+		return s.streamClient.Do(req)
+	}
+	return s.apiClient.Do(req)
+}
+
 func (s *Service) doRequest(req *http.Request, isStream bool, bodyPayload []byte) (*http.Response, error) {
 	directClient := s.apiClient
 	warpClient := s.warpAPIClient
@@ -214,8 +303,12 @@ func (s *Service) doRequest(req *http.Request, isStream bool, bodyPayload []byte
 		warpClient = s.warpStreamClient
 	}
 
-	warpAvailable := warpClient != nil && s.IsWarpActive()
 	forceWarp := strings.EqualFold(os.Getenv("WARP_FORCE"), "1") || strings.EqualFold(os.Getenv("WARP_FORCE"), "true")
+	targetHost := ""
+	if req.URL != nil {
+		targetHost = req.URL.Host
+	}
+	warpAllowed := warpClient != nil && s.shouldUseWarpForHost(targetHost, forceWarp)
 
 	buildClone := func() (*http.Request, error) {
 		cloned := req.Clone(req.Context())
@@ -225,11 +318,14 @@ func (s *Service) doRequest(req *http.Request, isStream bool, bodyPayload []byte
 		return cloned, nil
 	}
 
-	if forceWarp && warpAvailable {
+	if forceWarp && warpAllowed {
 		r1, _ := buildClone()
 		resp, err := warpClient.Do(r1)
 		if err == nil && resp.StatusCode != 403 && resp.StatusCode != 429 && resp.StatusCode < 502 {
 			return resp, nil
+		}
+		if err != nil {
+			s.tripWarpBackoff()
 		}
 		if resp != nil {
 			resp.Body.Close()
@@ -239,20 +335,22 @@ func (s *Service) doRequest(req *http.Request, isStream bool, bodyPayload []byte
 	}
 
 	resp, err := directClient.Do(req)
-	if (err != nil || (resp != nil && (resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode >= 502))) && warpAvailable {
+	if (err != nil || (resp != nil && (resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode >= 502))) && warpAllowed {
 		if resp != nil {
 			resp.Body.Close()
 		}
 		rRetry, _ := buildClone()
 		if wResp, wErr := warpClient.Do(rRetry); wErr == nil {
 			return wResp, nil
-		} else if err != nil {
-			return nil, err
 		} else {
+			s.tripWarpBackoff()
+			if err != nil {
+				return nil, err
+			}
 			return nil, wErr
 		}
 	}
-	if !warpAvailable && (req.Method == http.MethodGet || req.Method == http.MethodHead) &&
+	if !warpAllowed && (req.Method == http.MethodGet || req.Method == http.MethodHead) &&
 		(err != nil || (resp != nil && (resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusServiceUnavailable))) {
 		if resp != nil {
 			resp.Body.Close()
@@ -266,6 +364,527 @@ func (s *Service) doRequest(req *http.Request, isStream bool, bodyPayload []byte
 		}
 	}
 	return resp, err
+}
+
+func extractQueryParamRaw(rawQuery, key string) string {
+	if rawQuery == "" || key == "" {
+		return ""
+	}
+	for _, part := range strings.Split(rawQuery, "&") {
+		if part == "" {
+			continue
+		}
+		eq := strings.IndexByte(part, '=')
+		if eq < 0 {
+			continue
+		}
+		if part[:eq] == key {
+			return part[eq+1:]
+		}
+	}
+	return ""
+}
+
+// replaceHostQueryParam rewrites only the `host=` query parameter while leaving all
+// signed YouTube parameters (`sig`, `lsig`, `sparams`, `pot`, etc.) byte-identical.
+func replaceHostQueryParam(rawURL, newHost string) string {
+	idx := strings.IndexByte(rawURL, '?')
+	if idx < 0 {
+		return rawURL
+	}
+	escapedNewHost := url.QueryEscape(newHost)
+	parts := strings.Split(rawURL[idx+1:], "&")
+	replaced := false
+	out := make([]string, 0, len(parts)+1)
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		eq := strings.IndexByte(part, '=')
+		if eq > 0 && part[:eq] == "host" {
+			if !replaced {
+				out = append(out, "host="+escapedNewHost)
+				replaced = true
+			}
+			continue
+		}
+		out = append(out, part)
+	}
+	if !replaced {
+		out = append(out, "host="+escapedNewHost)
+	}
+	return rawURL[:idx] + "?" + strings.Join(out, "&")
+}
+
+// extractVideoPlaybackFallbackHosts derives YouTube's alternate unsigned CDN edge hosts
+// from the URL's `mn=` (primary,secondary cluster names) and `fvip=` query parameters.
+func extractVideoPlaybackFallbackHosts(rawURL string) (primaryHost string, fallbacks []string) {
+	idx := strings.IndexByte(rawURL, '?')
+	if idx < 0 {
+		return "", nil
+	}
+	rawQ := rawURL[idx+1:]
+	rawHost := extractQueryParamRaw(rawQ, "host")
+	if rawHost == "" {
+		return "", nil
+	}
+	if unescaped, err := url.QueryUnescape(rawHost); err == nil {
+		primaryHost = strings.TrimSpace(unescaped)
+	} else {
+		primaryHost = strings.TrimSpace(rawHost)
+	}
+	if primaryHost == "" || !isGoogleVideoHost(primaryHost) {
+		return "", nil
+	}
+
+	rawMN := extractQueryParamRaw(rawQ, "mn")
+	if rawMN == "" {
+		return primaryHost, nil
+	}
+	mnDecoded := rawMN
+	if unescaped, err := url.QueryUnescape(rawMN); err == nil {
+		mnDecoded = unescaped
+	}
+	var mns []string
+	for _, seg := range strings.Split(mnDecoded, ",") {
+		s := strings.TrimSpace(seg)
+		if s != "" && reEdgeLabel.MatchString(s) {
+			mns = append(mns, s)
+		}
+	}
+	if len(mns) == 0 {
+		return primaryHost, nil
+	}
+
+	fvip := "1"
+	if rawFvip := extractQueryParamRaw(rawQ, "fvip"); rawFvip != "" {
+		if unescaped, err := url.QueryUnescape(rawFvip); err == nil {
+			rawFvip = unescaped
+		}
+		rawFvip = strings.TrimSpace(rawFvip)
+		if len(rawFvip) == 1 && rawFvip[0] >= '1' && rawFvip[0] <= '9' {
+			fvip = rawFvip
+		}
+	}
+
+	seen := map[string]bool{strings.ToLower(primaryHost): true}
+	addHost := func(h string) {
+		lh := strings.ToLower(h)
+		if !seen[lh] {
+			seen[lh] = true
+			fallbacks = append(fallbacks, h)
+		}
+	}
+
+	if len(mns) >= 2 {
+		addHost(fmt.Sprintf("rr%s---%s.googlevideo.com", fvip, mns[1]))
+		if fvip != "1" {
+			addHost(fmt.Sprintf("rr1---%s.googlevideo.com", mns[1]))
+		}
+	}
+	if len(mns) >= 1 {
+		addHost(fmt.Sprintf("rr1---%s.googlevideo.com", mns[0]))
+		if fvip != "1" {
+			addHost(fmt.Sprintf("rr%s---%s.googlevideo.com", fvip, mns[0]))
+		}
+	}
+	return primaryHost, fallbacks
+}
+
+func (s *Service) isEdgeBadLocked(host string, now time.Time) bool {
+	if s.badEdgeHosts == nil || host == "" {
+		return false
+	}
+	exp, ok := s.badEdgeHosts[strings.ToLower(host)]
+	return ok && now.Before(exp)
+}
+
+func (s *Service) markEdgeBad(host string) {
+	if host == "" {
+		return
+	}
+	key := strings.ToLower(host)
+	s.edgeMu.Lock()
+	if s.badEdgeHosts == nil {
+		s.badEdgeHosts = make(map[string]time.Time)
+	}
+	if len(s.badEdgeHosts) > 500 {
+		now := time.Now()
+		for k, exp := range s.badEdgeHosts {
+			if !now.Before(exp) {
+				delete(s.badEdgeHosts, k)
+			}
+		}
+	}
+	s.badEdgeHosts[key] = time.Now().Add(5 * time.Minute)
+	s.edgeMu.Unlock()
+}
+
+func (s *Service) recordPreferredEdge(primaryHost, winningEdge string) {
+	if primaryHost == "" || winningEdge == "" || strings.EqualFold(primaryHost, winningEdge) {
+		return
+	}
+	key := strings.ToLower(primaryHost)
+	winKey := strings.ToLower(winningEdge)
+	s.edgeMu.Lock()
+	if s.preferredEdgeByPrimary == nil {
+		s.preferredEdgeByPrimary = make(map[string]edgeOverride)
+	}
+	if len(s.preferredEdgeByPrimary) > 500 {
+		now := time.Now()
+		for k, ov := range s.preferredEdgeByPrimary {
+			if !now.Before(ov.expiry) {
+				delete(s.preferredEdgeByPrimary, k)
+			}
+		}
+	}
+	if s.badEdgeHosts != nil {
+		delete(s.badEdgeHosts, winKey)
+	}
+	s.preferredEdgeByPrimary[key] = edgeOverride{
+		host:   winningEdge,
+		expiry: time.Now().Add(5 * time.Minute),
+	}
+	s.edgeMu.Unlock()
+}
+
+func (s *Service) clearPreferredEdge(primaryHost string) {
+	if primaryHost == "" {
+		return
+	}
+	key := strings.ToLower(primaryHost)
+	s.edgeMu.Lock()
+	if s.preferredEdgeByPrimary != nil {
+		delete(s.preferredEdgeByPrimary, key)
+	}
+	s.edgeMu.Unlock()
+}
+
+func (s *Service) orderMediaCandidates(rawURL string) (primaryHost string, usedOverride bool, cands []mediaCandidate) {
+	primaryHost, fallbacks := extractVideoPlaybackFallbackHosts(rawURL)
+	if primaryHost == "" || len(fallbacks) == 0 {
+		return primaryHost, false, []mediaCandidate{{url: rawURL, edgeHost: primaryHost}}
+	}
+
+	now := time.Now()
+	s.edgeMu.RLock()
+	var overrideHost string
+	if s.preferredEdgeByPrimary != nil {
+		if ov, ok := s.preferredEdgeByPrimary[strings.ToLower(primaryHost)]; ok && now.Before(ov.expiry) && ov.host != "" {
+			if !s.isEdgeBadLocked(ov.host, now) {
+				overrideHost = ov.host
+			}
+		}
+	}
+
+	if overrideHost != "" {
+		usedOverride = true
+		var badTail []mediaCandidate
+		cands = append(cands, mediaCandidate{
+			url:      replaceHostQueryParam(rawURL, overrideHost),
+			edgeHost: overrideHost,
+		})
+		for _, fb := range fallbacks {
+			if strings.EqualFold(fb, overrideHost) {
+				continue
+			}
+			mc := mediaCandidate{url: replaceHostQueryParam(rawURL, fb), edgeHost: fb}
+			if s.isEdgeBadLocked(fb, now) {
+				badTail = append(badTail, mc)
+			} else {
+				cands = append(cands, mc)
+			}
+		}
+		primMC := mediaCandidate{url: rawURL, edgeHost: primaryHost}
+		if s.isEdgeBadLocked(primaryHost, now) {
+			badTail = append(badTail, primMC)
+		} else {
+			cands = append(cands, primMC)
+		}
+		cands = append(cands, badTail...)
+		s.edgeMu.RUnlock()
+		return primaryHost, usedOverride, cands
+	}
+
+	var healthy []mediaCandidate
+	var bad []mediaCandidate
+	all := make([]mediaCandidate, 0, 1+len(fallbacks))
+	all = append(all, mediaCandidate{url: rawURL, edgeHost: primaryHost})
+	for _, fb := range fallbacks {
+		all = append(all, mediaCandidate{url: replaceHostQueryParam(rawURL, fb), edgeHost: fb})
+	}
+	for _, mc := range all {
+		if s.isEdgeBadLocked(mc.edgeHost, now) {
+			bad = append(bad, mc)
+		} else {
+			healthy = append(healthy, mc)
+		}
+	}
+	s.edgeMu.RUnlock()
+
+	cands = append(healthy, bad...)
+	return primaryHost, false, cands
+}
+
+func buildUpstreamMediaRequest(ctx context.Context, method, targetURL string, r *http.Request, bodyBytes []byte) (*http.Request, error) {
+	var bodyReader io.Reader
+	if len(bodyBytes) > 0 && method != http.MethodGet && method != http.MethodHead {
+		bodyReader = bytes.NewReader(bodyBytes)
+	}
+	upReq, err := http.NewRequestWithContext(ctx, method, targetURL, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	upReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PhimAI/2.0")
+	upReq.Header.Set("Accept-Language", "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7")
+	upReq.Header.Set("Accept-Encoding", "identity")
+	if r != nil {
+		if rng := r.Header.Get("Range"); rng != "" {
+			upReq.Header.Set("Range", rng)
+		}
+		if ifRng := r.Header.Get("If-Range"); ifRng != "" {
+			upReq.Header.Set("If-Range", ifRng)
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "" {
+			upReq.Header.Set("Content-Type", ct)
+		}
+		if acc := r.Header.Get("Accept"); acc != "" {
+			upReq.Header.Set("Accept", acc)
+		}
+	}
+	return upReq, nil
+}
+
+// doHedgedMediaRequest races the primary edge host against YouTube's mn/fvip fallback nodes
+// after a short hedge delay (3s) so stalled CDN edges recover automatically mid-flight.
+func (s *Service) doHedgedMediaRequest(r *http.Request, method, rawURL string, bodyBytes []byte) (*http.Response, func(), error) {
+	primaryHost, usedOverride, cands := s.orderMediaCandidates(rawURL)
+	if len(cands) <= 1 || (method != http.MethodGet && method != http.MethodHead) {
+		upReq, err := buildUpstreamMediaRequest(r.Context(), method, rawURL, r, bodyBytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		resp, err := s.doRequest(upReq, true, bodyBytes)
+		return resp, nil, err
+	}
+
+	type attemptResult struct {
+		idx    int
+		resp   *http.Response
+		err    error
+		cancel context.CancelFunc
+	}
+
+	isUsable := func(resp *http.Response, err error) bool {
+		return err == nil && resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 400
+	}
+
+	hedgeDelay := s.hedgeDelay
+	if hedgeDelay <= 0 {
+		hedgeDelay = 3 * time.Second
+	}
+
+	var stateMu sync.Mutex
+	finished := false
+	var cancels [2]context.CancelFunc
+	ch := make(chan attemptResult, 2)
+
+	launch := func(idx int) {
+		ctx, cancel := context.WithCancel(r.Context())
+		stateMu.Lock()
+		if finished {
+			stateMu.Unlock()
+			cancel()
+			return
+		}
+		cancels[idx] = cancel
+		stateMu.Unlock()
+
+		req, err := buildUpstreamMediaRequest(ctx, method, cands[idx].url, r, bodyBytes)
+		var resp *http.Response
+		if err == nil {
+			resp, err = s.doDirectRequest(req, true)
+		}
+
+		stateMu.Lock()
+		if finished {
+			stateMu.Unlock()
+			if resp != nil {
+				resp.Body.Close()
+			}
+			cancel()
+			return
+		}
+		ch <- attemptResult{idx: idx, resp: resp, err: err, cancel: cancel}
+		stateMu.Unlock()
+	}
+
+	cleanupAllPending := func(keepIdx int) {
+		stateMu.Lock()
+		finished = true
+		for i := range cancels {
+			if i != keepIdx && cancels[i] != nil {
+				cancels[i]()
+			}
+		}
+		for {
+			select {
+			case extra := <-ch:
+				if extra.idx != keepIdx {
+					if extra.resp != nil {
+						extra.resp.Body.Close()
+					}
+					if extra.cancel != nil {
+						extra.cancel()
+					}
+				}
+			default:
+				stateMu.Unlock()
+				return
+			}
+		}
+	}
+
+	go launch(0)
+	timer := time.NewTimer(hedgeDelay)
+	defer timer.Stop()
+
+	hedged := false
+	inflight := 1
+	var lastErrResp *http.Response
+	var lastErrCancel context.CancelFunc
+	var lastErr error
+
+	clearLastErrResp := func() {
+		if lastErrResp != nil {
+			lastErrResp.Body.Close()
+			lastErrResp = nil
+		}
+		if lastErrCancel != nil {
+			lastErrCancel()
+			lastErrCancel = nil
+		}
+	}
+
+	for inflight > 0 || !hedged {
+		if !hedged {
+			select {
+			case <-r.Context().Done():
+				cleanupAllPending(-1)
+				clearLastErrResp()
+				return nil, nil, r.Context().Err()
+			case <-timer.C:
+				hedged = true
+				inflight++
+				go launch(1)
+			case res := <-ch:
+				inflight--
+				if isUsable(res.resp, res.err) {
+					cleanupAllPending(res.idx)
+					clearLastErrResp()
+					if !strings.EqualFold(cands[res.idx].edgeHost, primaryHost) {
+						s.recordPreferredEdge(primaryHost, cands[res.idx].edgeHost)
+					}
+					return res.resp, res.cancel, nil
+				}
+				s.markEdgeBad(cands[res.idx].edgeHost)
+				if res.idx == 0 && usedOverride {
+					s.clearPreferredEdge(primaryHost)
+				}
+				if res.resp != nil {
+					clearLastErrResp()
+					lastErrResp, lastErrCancel, lastErr = res.resp, res.cancel, res.err
+				} else {
+					if res.cancel != nil {
+						res.cancel()
+					}
+					if res.err != nil {
+						lastErr = res.err
+					}
+				}
+				// Attempt 0 failed early -> hedge immediately without waiting for timer
+				hedged = true
+				inflight++
+				go launch(1)
+			}
+		} else {
+			select {
+			case <-r.Context().Done():
+				cleanupAllPending(-1)
+				clearLastErrResp()
+				return nil, nil, r.Context().Err()
+			case res := <-ch:
+				inflight--
+				if isUsable(res.resp, res.err) {
+					cleanupAllPending(res.idx)
+					clearLastErrResp()
+					if res.idx == 1 {
+						s.markEdgeBad(cands[0].edgeHost)
+						if usedOverride && primaryHost != "" {
+							s.clearPreferredEdge(primaryHost)
+						}
+					}
+					if !strings.EqualFold(cands[res.idx].edgeHost, primaryHost) {
+						s.recordPreferredEdge(primaryHost, cands[res.idx].edgeHost)
+					}
+					return res.resp, res.cancel, nil
+				}
+				s.markEdgeBad(cands[res.idx].edgeHost)
+				if res.idx == 0 && usedOverride {
+					s.clearPreferredEdge(primaryHost)
+				}
+				if res.resp != nil {
+					clearLastErrResp()
+					lastErrResp, lastErrCancel, lastErr = res.resp, res.cancel, res.err
+				} else {
+					if res.cancel != nil {
+						res.cancel()
+					}
+					if res.err != nil {
+						lastErr = res.err
+					}
+				}
+			}
+		}
+	}
+
+	cleanupAllPending(-1)
+
+	// Try remaining fallback candidates sequentially
+	for idx := 2; idx < len(cands); idx++ {
+		if r.Context().Err() != nil {
+			clearLastErrResp()
+			return nil, nil, r.Context().Err()
+		}
+		ctx, cancel := context.WithCancel(r.Context())
+		req, err := buildUpstreamMediaRequest(ctx, method, cands[idx].url, r, bodyBytes)
+		if err != nil {
+			cancel()
+			lastErr = err
+			continue
+		}
+		resp, doErr := s.doDirectRequest(req, true)
+		if isUsable(resp, doErr) {
+			clearLastErrResp()
+			s.recordPreferredEdge(primaryHost, cands[idx].edgeHost)
+			return resp, cancel, nil
+		}
+		s.markEdgeBad(cands[idx].edgeHost)
+		if resp != nil {
+			clearLastErrResp()
+			lastErrResp, lastErrCancel, lastErr = resp, cancel, doErr
+		} else {
+			cancel()
+			if doErr != nil {
+				lastErr = doErr
+			}
+		}
+	}
+
+	if lastErrResp != nil {
+		return lastErrResp, lastErrCancel, nil
+	}
+	return nil, nil, lastErr
 }
 
 func stripKeepAliveParam(rawQuery string) string {
@@ -622,6 +1241,59 @@ func (s *Service) fetchRawInvidiousVideo(ctx context.Context, videoID string) ([
 	return rewrittenBytes, raw, nil
 }
 
+func (s *Service) evictVideoCache(videoID string) {
+	if videoID == "" {
+		return
+	}
+	s.mu.Lock()
+	delete(s.rawCache, "video:"+videoID)
+	delete(s.videoCache, videoID)
+	s.mu.Unlock()
+}
+
+func (s *Service) lookupStreamURLByItag(raw map[string]interface{}, itag string) string {
+	if raw == nil || itag == "" {
+		return ""
+	}
+	searchSlice := func(key string) string {
+		items, ok := raw[key].([]interface{})
+		if !ok {
+			return ""
+		}
+		for _, item := range items {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			itemItag := fmt.Sprintf("%v", m["itag"])
+			if itemItag != itag {
+				continue
+			}
+			u, _ := m["url"].(string)
+			if u != "" {
+				return s.RewriteStreamURLToSameOrigin(u)
+			}
+		}
+		return ""
+	}
+	if u := searchSlice("formatStreams"); u != "" {
+		return u
+	}
+	return searchSlice("adaptiveFormats")
+}
+
+func hasVideoPlaybackHedgeParams(rawURL string) bool {
+	if !strings.Contains(rawURL, "videoplayback") {
+		return false
+	}
+	idx := strings.IndexByte(rawURL, '?')
+	if idx < 0 {
+		return false
+	}
+	rawQ := rawURL[idx+1:]
+	return extractQueryParamRaw(rawQ, "host") != "" && extractQueryParamRaw(rawQ, "mn") != ""
+}
+
 // ProxyInvidious acts as a full native same-origin /api/invidious/* proxy matching KV-Tube's architecture.
 func (s *Service) ProxyInvidious(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
@@ -670,71 +1342,131 @@ func (s *Service) ProxyInvidious(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Preserve /companion/* and route through buildUpstreamTarget
-	targetURL := s.buildUpstreamTarget(subPath, r.URL.RawQuery)
-
 	var bodyBytes []byte
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Body != nil {
 		bodyBytes, _ = io.ReadAll(io.LimitReader(r.Body, 4*1024*1024))
 	}
 
-	// Perform upstream request following Companion/Invidious redirects safely on the server side
+	var winnerCancels []func()
+	defer func() {
+		for _, c := range winnerCancels {
+			if c != nil {
+				c()
+			}
+		}
+	}()
+
 	var upstreamResp *http.Response
-	currentURL := targetURL
-	currentMethod := r.Method
-	for hop := 0; hop <= 4; hop++ {
-		var bodyReader io.Reader
-		if len(bodyBytes) > 0 && currentMethod != http.MethodGet && currentMethod != http.MethodHead {
-			bodyReader = bytes.NewReader(bodyBytes)
-		}
-		upReq, err := http.NewRequestWithContext(r.Context(), currentMethod, currentURL, bodyReader)
-		if err != nil {
-			http.Error(w, `{"error":"invalid upstream request"}`, http.StatusBadGateway)
-			return
-		}
-		upReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PhimAI/2.0")
-		upReq.Header.Set("Accept-Language", "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7")
-		upReq.Header.Set("Accept-Encoding", "identity")
-		if rng := r.Header.Get("Range"); rng != "" {
-			upReq.Header.Set("Range", rng)
-		}
-		if ifRng := r.Header.Get("If-Range"); ifRng != "" {
-			upReq.Header.Set("If-Range", ifRng)
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "" {
-			upReq.Header.Set("Content-Type", ct)
-		}
-		if acc := r.Header.Get("Accept"); acc != "" {
-			upReq.Header.Set("Accept", acc)
-		}
 
-		res, err := s.doRequest(upReq, true, bodyBytes)
-		if err != nil {
-			http.Error(w, `{"error":"upstream connection failed"}`, http.StatusBadGateway)
-			return
+	// Fast-path /latest_version using cached/fetched Companion videoplayback URL + hedged mn/fvip failover
+	if subPath == "/latest_version" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		vid := strings.TrimSpace(r.URL.Query().Get("id"))
+		itag := strings.TrimSpace(r.URL.Query().Get("itag"))
+		if itag == "" {
+			itag = "18"
 		}
-
-		if (res.StatusCode == 301 || res.StatusCode == 302 || res.StatusCode == 303 || res.StatusCode == 307 || res.StatusCode == 308) && res.Header.Get("Location") != "" && hop < 4 {
-			loc := res.Header.Get("Location")
-			res.Body.Close()
-			if res.StatusCode == 303 {
-				currentMethod = http.MethodGet
+		if vid != "" {
+			_, raw, err := s.fetchRawInvidiousVideo(r.Context(), vid)
+			if err == nil && raw != nil {
+				if matchedPath := s.lookupStreamURLByItag(raw, itag); matchedPath != "" {
+					trimmed := strings.TrimPrefix(matchedPath, "/api/invidious")
+					mPath, mQuery := trimmed, ""
+					if qIdx := strings.IndexByte(trimmed, '?'); qIdx >= 0 {
+						mPath = trimmed[:qIdx]
+						mQuery = trimmed[qIdx+1:]
+					}
+					resolvedURL := s.buildUpstreamTarget(mPath, mQuery)
+					if hasVideoPlaybackHedgeParams(resolvedURL) {
+						hResp, hCancel, hErr := s.doHedgedMediaRequest(r, r.Method, resolvedURL, bodyBytes)
+						if hErr == nil && hResp != nil {
+							if hResp.StatusCode >= 200 && hResp.StatusCode < 300 {
+								if hCancel != nil {
+									winnerCancels = append(winnerCancels, hCancel)
+								}
+								upstreamResp = hResp
+							} else {
+								if hResp.StatusCode == http.StatusForbidden || hResp.StatusCode == http.StatusNotFound || hResp.StatusCode == http.StatusGone {
+									s.evictVideoCache(vid)
+								}
+								hResp.Body.Close()
+								if hCancel != nil {
+									hCancel()
+								}
+							}
+						} else if hCancel != nil {
+							hCancel()
+						}
+					}
+				}
 			}
-			// Rewrite redirect targets through upstream or follow direct URL
-			if strings.HasPrefix(loc, "/") {
-				trimmedLoc := strings.TrimPrefix(loc, "/api/invidious")
-				currentURL = s.buildUpstreamTarget(trimmedLoc, "")
-			} else if parsedLoc, perr := url.Parse(loc); perr == nil && !isGoogleVideoHost(parsedLoc.Host) &&
-				(s.isUpstreamHost(parsedLoc.Host) || isBackendPath(parsedLoc.Path)) {
-				currentURL = s.buildUpstreamTarget(parsedLoc.Path, parsedLoc.RawQuery)
+		}
+	}
+
+	// Preserve /companion/* and route through buildUpstreamTarget
+	if upstreamResp == nil {
+		targetURL := s.buildUpstreamTarget(subPath, r.URL.RawQuery)
+
+		// Perform upstream request following Companion/Invidious redirects safely on the server side
+		currentURL := targetURL
+		currentMethod := r.Method
+		for hop := 0; hop <= 4; hop++ {
+			var res *http.Response
+			var hCancel func()
+			var err error
+
+			if (currentMethod == http.MethodGet || currentMethod == http.MethodHead) && hasVideoPlaybackHedgeParams(currentURL) {
+				res, hCancel, err = s.doHedgedMediaRequest(r, currentMethod, currentURL, bodyBytes)
 			} else {
-				currentURL = loc
+				var upReq *http.Request
+				upReq, err = buildUpstreamMediaRequest(r.Context(), currentMethod, currentURL, r, bodyBytes)
+				if err != nil {
+					http.Error(w, `{"error":"invalid upstream request"}`, http.StatusBadGateway)
+					return
+				}
+				res, err = s.doRequest(upReq, true, bodyBytes)
 			}
-			continue
-		}
 
-		upstreamResp = res
-		break
+			if err != nil {
+				if hCancel != nil {
+					hCancel()
+				}
+				http.Error(w, `{"error":"upstream connection failed"}`, http.StatusBadGateway)
+				return
+			}
+
+			if (res.StatusCode == 301 || res.StatusCode == 302 || res.StatusCode == 303 || res.StatusCode == 307 || res.StatusCode == 308) && res.Header.Get("Location") != "" && hop < 4 {
+				loc := res.Header.Get("Location")
+				res.Body.Close()
+				if hCancel != nil {
+					hCancel()
+				}
+				if res.StatusCode == 303 {
+					currentMethod = http.MethodGet
+				}
+				// Rewrite redirect targets through upstream or follow direct URL
+				if strings.HasPrefix(loc, "/") {
+					trimmedLoc := strings.TrimPrefix(loc, "/api/invidious")
+					locPath, locQuery := trimmedLoc, ""
+					if qIdx := strings.IndexByte(trimmedLoc, '?'); qIdx >= 0 {
+						locPath = trimmedLoc[:qIdx]
+						locQuery = trimmedLoc[qIdx+1:]
+					}
+					currentURL = s.buildUpstreamTarget(locPath, locQuery)
+				} else if parsedLoc, perr := url.Parse(loc); perr == nil && !isGoogleVideoHost(parsedLoc.Host) &&
+					(s.isUpstreamHost(parsedLoc.Host) || isBackendPath(parsedLoc.Path)) {
+					currentURL = s.buildUpstreamTarget(parsedLoc.Path, parsedLoc.RawQuery)
+				} else {
+					currentURL = loc
+				}
+				continue
+			}
+
+			if hCancel != nil {
+				winnerCancels = append(winnerCancels, hCancel)
+			}
+			upstreamResp = res
+			break
+		}
 	}
 
 	if upstreamResp == nil {
@@ -1267,62 +1999,19 @@ func (s *Service) GetChannelUpstream(ctx context.Context, authorID string) (map[
 	return parsed, nil
 }
 
-// ProxyStream streams video bytes from upstream latest_version proxy with Range support.
+// ProxyStream streams video bytes via /api/invidious/latest_version with Range support and hedged edge failover.
 func (s *Service) ProxyStream(w http.ResponseWriter, r *http.Request, videoID string) {
 	itag := r.URL.Query().Get("itag")
 	if itag == "" {
 		itag = "18"
 	}
 
-	upstreamURL := fmt.Sprintf("%s/latest_version?id=%s&itag=%s&local=true",
-		s.UpstreamRoot, url.QueryEscape(videoID), url.QueryEscape(itag))
-
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, `{"error":"invalid upstream request"}`, http.StatusBadGateway)
-		return
-	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PhimAI/2.0")
-	req.Header.Set("Accept-Encoding", "identity")
-	if rng := r.Header.Get("Range"); rng != "" {
-		req.Header.Set("Range", rng)
-	}
-
-	resp, err := s.doRequest(req, true, nil)
-	if err != nil {
-		http.Error(w, `{"error":"stream upstream unreachable"}`, http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 && resp.Header.Get("Location") != "" {
-		http.Redirect(w, r, s.RewriteStreamURLToSameOrigin(resp.Header.Get("Location")), resp.StatusCode)
-		return
-	}
-
-	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Cache-Control", "ETag"} {
-		if val := resp.Header.Get(h); val != "" {
-			w.Header().Set(h, val)
-		}
-	}
-	if w.Header().Get("Content-Type") == "" {
-		w.Header().Set("Content-Type", "video/mp4")
-	}
-	if w.Header().Get("Accept-Ranges") == "" {
-		w.Header().Set("Accept-Ranges", "bytes")
-	}
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	statusCode := resp.StatusCode
-	if statusCode == http.StatusOK && r.Header.Get("Range") != "" && resp.Header.Get("Content-Range") != "" {
-		statusCode = http.StatusPartialContent
-	}
-	w.WriteHeader(statusCode)
-	if r.Method != http.MethodHead {
-		_, _ = io.Copy(w, resp.Body)
-	}
+	cloned := r.Clone(r.Context())
+	u := *r.URL
+	u.Path = "/api/invidious/latest_version"
+	u.RawQuery = fmt.Sprintf("id=%s&itag=%s&local=true", url.QueryEscape(videoID), url.QueryEscape(itag))
+	cloned.URL = &u
+	s.ProxyInvidious(w, cloned)
 }
 
 // ProxyThumb proxies video thumbnails with 6-hour in-memory cache.

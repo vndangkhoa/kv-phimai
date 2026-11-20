@@ -524,7 +524,7 @@ export function WatchPage({
                     }}
                   >
                     <span>{displayChannel}</span>
-                    <BadgeCheck size={14} strokeWidth={1.75} style={{ color: 'var(--color-accent, #ffd875)' }} />
+                    <BadgeCheck size={14} strokeWidth={1.75} style={{ flexShrink: 0, color: 'var(--color-accent, #ffd875)' }} />
                   </div>
                   <div className="phimai-tabular" style={{ fontSize: '12px', color: 'var(--yt-text-muted, #989fb8)' }}>
                     {channelFilmCount} phim trong kho
@@ -532,26 +532,28 @@ export function WatchPage({
                 </div>
               </div>
 
-              <Button
-                variant={subscribed ? 'secondary' : 'primary'}
-                size="md"
-                label={subscribed ? 'Đã đăng ký' : 'Đăng ký'}
-                icon={subscribed ? <Check size={15} strokeWidth={1.75} /> : <UserPlus size={15} strokeWidth={1.75} />}
-                onClick={() => {
-                  const res = toggleChannelSubscription({
-                    name: displayChannel,
-                    thumbnail: getThumbUrl(film.id),
-                  });
-                  setSubscribed(res.subscribed);
-                }}
-              />
+              <div className="watch-channel-actions">
+                <Button
+                  variant={subscribed ? 'secondary' : 'primary'}
+                  size="md"
+                  label={subscribed ? 'Đã đăng ký' : 'Đăng ký'}
+                  icon={subscribed ? <Check size={15} strokeWidth={1.75} /> : <UserPlus size={15} strokeWidth={1.75} />}
+                  onClick={() => {
+                    const res = toggleChannelSubscription({
+                      name: displayChannel,
+                      thumbnail: getThumbUrl(film.id),
+                    });
+                    setSubscribed(res.subscribed);
+                  }}
+                />
 
-              <Button
-                variant="secondary"
-                size="md"
-                label="Trang kênh"
-                onClick={() => onOpenChannel(displayChannel)}
-              />
+                <Button
+                  variant="secondary"
+                  size="md"
+                  label="Trang kênh"
+                  onClick={() => onOpenChannel(displayChannel)}
+                />
+              </div>
             </div>
 
             <div className="watch-actions-scroll-strip">

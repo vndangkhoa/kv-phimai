@@ -2313,7 +2313,7 @@
 .yt-header-left {
   display: flex;
   align-items: center;
-  min-width: 170px;
+  min-width: 0;
 }
 
 .yt-logo-link {
@@ -2480,7 +2480,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 170px;
+  min-width: 0;
   justify-content: flex-end;
 }
 
@@ -4911,10 +4911,32 @@
 .yt-header {
   height: var(--yt-header-height, 60px);
   padding: 0 18px;
+  box-sizing: border-box;
   background-color: rgba(13, 14, 20, 0.90);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--yt-border);
+}
+
+@media (max-width: 768px) {
+  .yt-header {
+    padding-inline: max(12px, env(safe-area-inset-left, 0px)) max(12px, env(safe-area-inset-right, 0px));
+    gap: 8px;
+  }
+
+  .yt-header-left {
+    min-inline-size: 0;
+    min-width: 0;
+    flex: 1 1 auto;
+    gap: 8px;
+  }
+
+  .yt-header-right {
+    min-inline-size: auto;
+    min-width: 0;
+    flex: 0 0 auto;
+    gap: 4px;
+  }
 }
 
 .phimai-online-pill {
@@ -5266,6 +5288,41 @@
   overflow: hidden;
   border: 1px solid var(--yt-border);
   box-shadow: var(--shadow-high, 0 24px 64px -16px rgba(0, 0, 0, 0.85));
+}
+
+.watch-channel-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+  .watch-title {
+    padding: 0;
+  }
+
+  .watch-channel-group {
+    flex-wrap: wrap !important;
+    justify-content: flex-start !important;
+    gap: 10px 12px !important;
+  }
+
+  .watch-channel-link {
+    flex: 1 1 100% !important;
+    max-width: 100% !important;
+    min-inline-size: 0 !important;
+  }
+
+  .watch-channel-actions {
+    width: 100%;
+  }
+
+  .watch-channel-actions > button {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
 }
 
 .phimai-series-panel {
