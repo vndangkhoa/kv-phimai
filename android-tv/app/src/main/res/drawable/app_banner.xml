@@ -1,0 +1,57 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <!-- Cinema Noir Obsidian-to-Slate Backdrop -->
+    <path android:pathData="M0,0H320V180H0Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="320"
+                android:endY="180"
+                android:startX="0"
+                android:startY="0"
+                android:type="linear">
+                <item android:color="#FF0D0E14" android:offset="0" />
+                <item android:color="#FF161822" android:offset="0.55" />
+                <item android:color="#FF1E131B" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Crimson top stripe & gold bottom hairline -->
+    <path android:fillColor="#FFE50914" android:pathData="M0,0H320V5H0Z" />
+    <path android:fillColor="#44FFD875" android:pathData="M0,178H320V180H0Z" />
+
+    <!-- PhimAI Crimson Square Mark on Left -->
+    <group android:translateX="24" android:translateY="44" android:scaleX="0.18" android:scaleY="0.18">
+        <path android:pathData="M128,16 H384 A112,112 0 0 1 496,128 V384 A112,112 0 0 1 384,496 H128 A112,112 0 0 1 16,384 V128 A112,112 0 0 1 128,16 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:endX="464" android:endY="480" android:startX="48" android:startY="32" android:type="linear">
+                    <item android:color="#FFFF244C" android:offset="0" />
+                    <item android:color="#FFE50914" android:offset="0.52" />
+                    <item android:color="#FF9E0610" android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:fillColor="#FFFFFFFF" android:pathData="M196,154 C196,142.2 209.1,135.1 219,141.5 L368,237.5 C377.1,243.4 377.1,256.6 368,262.5 L219,358.5 C209.1,364.9 196,357.8 196,346 Z" />
+        <path android:fillColor="#FFFFD875" android:pathData="M376,92 L386,124 L418,134 L386,144 L376,176 L366,144 L334,134 L366,124 Z" />
+        <path android:fillColor="#EBFFFFFF" android:pathData="M418,168 L422.5,182 L436.5,186.5 L422.5,191 L418,205 L413.5,191 L399.5,186.5 L413.5,182 Z" />
+    </group>
+
+    <!-- PHIM (Crimson) -->
+    <path android:fillColor="#FFE50914" android:pathData="M134,58 H149 C156,58 161,63 161,71 C161,79 156,84 149,84 H141 V104 H134 Z M141,64 V78 H148 C152,78 154,75.5 154,71 C154,66.5 152,64 148,64 Z" />
+    <path android:fillColor="#FFE50914" android:pathData="M166,58 H173 V77 H186 V58 H193 V104 H186 V83 H173 V104 H166 Z" />
+    <path android:fillColor="#FFE50914" android:pathData="M199,58 H206 V104 H199 Z" />
+    <path android:fillColor="#FFE50914" android:pathData="M212,58 H219 L226,84 L233,58 H240 V104 H234 V72 L228.5,93 H223.5 L218,72 V104 H212 Z" />
+
+    <!-- AI (Ivory + Gold Sparkle) -->
+    <path android:fillColor="#FFF4F4F6" android:pathData="M247,104 L257,58 H264 L274,104 H267.5 L265.2,93 H255.8 L253.5,104 Z M260.5,68 L257,87 H264 Z" />
+    <path android:fillColor="#FFF4F4F6" android:pathData="M279,58 H286 V104 H279 Z" />
+    <path android:fillColor="#FFFFD875" android:pathData="M294,54 L297,62 L305,65 L297,68 L294,76 L291,68 L283,65 L291,62 Z" />
+
+    <!-- Gold 4K Cinema Bar Accent below wordmark -->
+    <path android:fillColor="#26FFD875" android:pathData="M138,116 H226 A4,4 0 0 1 230,120 V132 A4,4 0 0 1 226,136 H138 A4,4 0 0 1 134,132 V120 A4,4 0 0 1 138,116 Z" />
+    <path android:fillColor="#FFFFD875" android:pathData="M148,121 L150,125 L154,126 L150,127 L148,131 L146,127 L142,126 L146,125 Z" />
+    <path android:fillColor="#FFFFD875" android:pathData="M162,124 H218 V128 H162 Z" />
+</vector>

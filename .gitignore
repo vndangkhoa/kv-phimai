@@ -17,3 +17,13 @@ backend/data/*.sqlite*
 .impeccable/review/*.png
 .DS_Store
 *.log
+
+# Android local config, caches & build outputs
+android-app/local.properties
+android-app/**/build/
+android-app/.gradle/
+android-tv/local.properties
+android-tv/**/build/
+android-tv/.gradle/
+.gradle/
+*.apk

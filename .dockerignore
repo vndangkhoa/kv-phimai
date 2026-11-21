@@ -6,3 +6,6 @@ backend/*.db*
 backend/data/*.db*
 .impeccable/review/*.png
 *.spk
+android-app
+android-tv
+*.apk

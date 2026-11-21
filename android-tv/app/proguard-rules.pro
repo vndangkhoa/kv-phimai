@@ -1,0 +1,3 @@
+-keep class com.phimai.tv.data.model.** { *; }
+-keep class kotlinx.serialization.** { *; }
+-keep class androidx.media3.** { *; }
